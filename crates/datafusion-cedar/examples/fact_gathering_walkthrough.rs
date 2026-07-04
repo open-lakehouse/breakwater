@@ -31,16 +31,23 @@
 //!   request context (principal) and the catalog (resource entity attributes).
 //! * **② Engine coarse gate** — the same shape, now also carrying the accessed
 //!   columns in the Cedar `context`.
-//! * **③ Engine governance** — a *partial* request (unknown resource) yields a
-//!   residual that lowers to a concrete row-filter / column-mask `Expr`. The
+//! * **③ Engine governance (row filter)** — a *partial* request (unknown
+//!   resource) yields a residual that lowers to a concrete row-filter `Expr`. The
 //!   residual is the artifact a "carry-residual" (option B in the ADR) design
 //!   would cache in the session store.
+//! * **③′ Engine governance (column mask)** — a *concrete* `Column` resource
+//!   carrying a governed key→value tag (`pii == "ssn"`) makes a `read_column`
+//!   forbid fire, masking the column. Flipping the tag flips masked/unmasked —
+//!   the same governed-tag fact `record_facts` populates as
+//!   `TableFacts.governed_column_tags`.
 //! * **④ Agent-tool PEP** — a tool call gated on the **session fact store**: a
 //!   taint accrued at ②/③ (`observed_taints` ∋ `"pii"`) flips a `forbid`
 //!   guardrail from allow to deny.
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
+
+use smol_str::SmolStr;
 
 use cedar_local_agent::public::simple::{Authorizer, AuthorizerConfigBuilder};
 use cedar_local_agent::public::{
@@ -86,6 +93,25 @@ permit (
     resource
 )
 when { principal has region && resource.region == principal.region };
+"#;
+
+/// Governance column-mask: a `read_column` forbid that fires — masking the
+/// column — only when the column carries the governed tag `pii == "ssn"`. The
+/// tag is a Cedar *entity tag* on the `Column` resource (UC `has_tag_value`
+/// semantics), read with the native `resource.hasTag`/`getTag` operators. This is
+/// the column-mask analog of `GOVERNANCE_POLICY`'s row filter: the same TPE
+/// machinery, but the resource uid is *concrete* (a specific column), so its
+/// governed tags fold in and the forbid decides masked/unmasked deterministically.
+const COLUMN_MASK_POLICY: &str = r#"
+permit (principal, action == Action::"read_column", resource);
+
+@id("mask_pii_ssn")
+forbid (
+    principal,
+    action == Action::"read_column",
+    resource
+)
+when { resource.hasTag("pii") && resource.getTag("pii") == "ssn" };
 "#;
 
 /// Agent guardrail: forbid the `send_external` tool when the session has observed
@@ -179,6 +205,82 @@ fn tool_resource(name: &str) -> EntityUid {
         EntityTypeName::from_str("Tool").unwrap(),
         EntityId::new(name),
     )
+}
+
+/// A `Column` resource uid, `Column::"<table>.<col>"` — the concrete uid the
+/// engine keys a column's governed tags onto (mirroring `cedar::column_is_masked`).
+fn column_resource(table: &str, column: &str) -> EntityUid {
+    EntityUid::from_type_name_and_id(
+        EntityTypeName::from_str("Column").unwrap(),
+        EntityId::new(format!("{table}.{column}")),
+    )
+}
+
+/// Lower governed key→value tags to the Cedar native-tags map a [`PartialEntity`]
+/// carries, mirroring `cedar::native_tags`. An empty map means the column carries
+/// no governed tags (so the mask forbid cannot fire).
+fn native_tags(tags: &[(&str, &str)]) -> std::collections::BTreeMap<SmolStr, RestrictedExpression> {
+    tags.iter()
+        .map(|(k, v)| {
+            (
+                SmolStr::from(*k),
+                RestrictedExpression::new_string((*v).into()),
+            )
+        })
+        .collect()
+}
+
+/// Run the column-mask probe for `alice` reading `<table>.<column>`, with the
+/// column carrying `governed_tags` folded into its native Cedar tags. Returns the
+/// `read_column` decision: `Deny` means the mask forbid fired (column masked),
+/// `Allow` means it survives unmasked. Mirrors `cedar::column_is_masked`: each
+/// forbid is probed alongside a blanket permit so the decision reflects only
+/// whether *that* forbid fires.
+fn column_mask_decision(
+    schema: &Schema,
+    table: &str,
+    column: &str,
+    principal_uid: &EntityUid,
+    governed_tags: &[(&str, &str)],
+) -> cedar_policy::Decision {
+    let column_uid = column_resource(table, column);
+    let mut attrs = std::collections::BTreeMap::new();
+    attrs.insert(
+        SmolStr::from("name"),
+        RestrictedExpression::new_string(column.into()),
+    );
+    let column_entity = PartialEntity::new(
+        column_uid.clone(),
+        Some(attrs),
+        Some(Default::default()),
+        Some(native_tags(governed_tags)),
+        schema,
+    )
+    .expect("column partial entity");
+    let (cat, sch, tbl) = {
+        let mut parts = table.split('.');
+        (
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+        )
+    };
+    let request = PartialRequest::new(
+        PartialEntityUid::from_concrete(principal_uid.clone()),
+        action("read_column"),
+        PartialEntityUid::from_concrete(column_uid),
+        Some(table_context(cat, sch, tbl, &[])),
+        schema,
+    )
+    .expect("column partial request");
+    let entities =
+        PartialEntities::from_partial_entities([column_entity], schema).expect("partial entities");
+    let policies = PolicySet::from_str(COLUMN_MASK_POLICY).expect("column-mask policy set");
+    policies
+        .tpe(&request, &entities, schema)
+        .expect("column-mask TPE")
+        .decision()
+        .expect("concrete decision")
 }
 
 /// Build the table-identity context (`catalog`/`schema`/`table`/`columns`),
@@ -448,6 +550,41 @@ async fn main() {
         println!("  (no non-trivial residual — policy fully decided)");
     }
 
+    // ── Decision point ③′ — Engine governance (column mask). ─────────────────
+    //
+    // The column-mask analog of the row filter above. Here the resource uid is
+    // *concrete* (a specific `Column::"…ssn"`), so the column's governed
+    // key→value tags fold into its native Cedar tags and a `read_column` forbid
+    // gated on `resource.getTag("pii") == "ssn"` can fire. This is exactly what
+    // `record_facts` populates as `TableFacts.governed_column_tags` and what
+    // `cedar::column_is_masked` probes. Flipping the tag flips masked/unmasked —
+    // nothing here is hardcoded.
+    divider("③′ Engine governance — governed column tag → column mask");
+    let table = "prod.customers.accounts";
+    // The governed tag the classification system (UC / Lineage) assigns to the
+    // `ssn` column: `pii = "ssn"`. In hydrofoil this arrives via the
+    // `GovernedTagProvider` and lands in `TableFacts.governed_column_tags`.
+    let ssn_tag: &[(&str, &str)] = &[("pii", "ssn")];
+    let masked = column_mask_decision(&schema, table, "ssn", &alice_uid, ssn_tag);
+    println!(
+        "  facts: column={table}.ssn · governed_column_tags={{pii: ssn}} (from GovernedTagProvider)"
+    );
+    println!(
+        "  → read_column is_authorized_partial = {masked:?}   (expect Deny — forbid fires → ssn is MASKED)"
+    );
+    // Counterfactual: the same column with the tag dropped is NOT masked, proving
+    // the mask is driven by the governed tag, not the column name.
+    let untagged = column_mask_decision(&schema, table, "ssn", &alice_uid, &[]);
+    println!("  facts: column={table}.ssn · governed_column_tags={{}} (tag dropped)");
+    println!(
+        "  → read_column is_authorized_partial = {untagged:?}   (expect Allow — no forbid fires → ssn is UNMASKED)"
+    );
+    // A non-PII column (`region`) is never masked, tag or no tag.
+    let region = column_mask_decision(&schema, table, "region", &alice_uid, &[]);
+    println!(
+        "  → region (untagged) read_column = {region:?}   (expect Allow — the mask targets pii-tagged columns only)"
+    );
+
     // Model the taint accrual that the engine performs as it reads a tagged
     // column: `protected_table.ssn` is tagged `pii`, so the session ledger gains
     // "pii". This is the one *shared-session-scoped* fact in the walkthrough.
@@ -505,5 +642,7 @@ async fn main() {
     println!("  → Cedar is_authorized = {decision:?}   (expect Allow — guardrail not triggered)");
 
     println!("\nWalkthrough complete. Every decision above is a real Cedar evaluation;");
-    println!("flipping a mocked fact (taint, group membership, region) changes the outcome.");
+    println!(
+        "flipping a mocked fact (taint, group membership, region, governed column tag) changes the outcome."
+    );
 }
