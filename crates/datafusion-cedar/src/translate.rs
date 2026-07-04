@@ -49,9 +49,16 @@ impl ConstraintTranslator for CedarResidualTranslator {
                 Clause::When(expr) => (expr, false),
                 Clause::Unless(expr) => (expr, true),
             };
-            // A clause that is the literal `true` contributes nothing (TPE leaves
-            // discharged guards as `true`); skip it rather than AND it in.
+            // A `when { true }` clause contributes nothing (TPE leaves discharged
+            // guards as `true`); skip it rather than AND it in. But an
+            // `unless { true }` clause is `when { false }` — it denies every row —
+            // so it must fold to `false`, not be skipped. (TPE only ever emits
+            // single `when` clauses, so this guards the public trait method
+            // against a hand-authored `unless { true }` residual.)
             if is_true_literal(raw) {
+                if negate {
+                    return Ok(Some(lit(false)));
+                }
                 continue;
             }
             let mut expr = translate_expr(raw)?;
@@ -238,6 +245,23 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(expr, !col("a").eq(lit(1i64)));
+    }
+
+    #[test]
+    fn unless_true_denies_all_rows() {
+        // `unless { true }` == `when { false }`: the residual must deny every row
+        // (fold to `false`), not be skipped like a discharged `when { true }`.
+        let expr = predicate(r#"permit(principal, action, resource) unless { true };"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(expr, lit(false));
+    }
+
+    #[test]
+    fn when_true_contributes_nothing() {
+        // A discharged `when { true }` guard adds no restriction (no filter).
+        let pred = predicate(r#"permit(principal, action, resource) when { true };"#).unwrap();
+        assert_eq!(pred, None);
     }
 
     #[test]
