@@ -27,7 +27,7 @@ mod visitor;
 #[cfg(feature = "fgac")]
 mod translate;
 
-pub use cedar::CedarPolicyEngine;
+pub use cedar::{CedarPolicyEngine, InMemoryPolicyProvider};
 pub use cedar_entity::{parse_uid, principal_entities};
 
 // Re-export the neutral core's public surface so a Cedar host imports one crate.

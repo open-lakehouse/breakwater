@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use std::str::FromStr as _;
+
 use cedar_local_agent::public::simple::{Authorizer, AuthorizerConfigBuilder};
-use cedar_local_agent::public::{SimpleEntityProvider, SimplePolicySetProvider};
-use cedar_policy::{Entities, Entity, RestrictedExpression};
+use cedar_local_agent::public::{
+    EntityProviderError, PolicySetProviderError, SimpleEntityProvider, SimplePolicySetProvider,
+};
+use cedar_policy::{Entities, Entity, PolicySet, Request, RestrictedExpression, Schema};
 use datafusion::common::plan_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
@@ -77,14 +81,13 @@ use {
     crate::translate::CedarResidualTranslator,
     cedar_policy::{
         Context, EntityTypeName, PartialEntities, PartialEntity, PartialEntityUid, PartialRequest,
-        Policy, Request, Schema,
+        Policy,
     },
     datafusion::common::DFSchema,
     datafusion::logical_expr::{Expr, ScalarUDF, col, lit},
     datafusion_policy::{ConstraintTranslator, TablePolicy},
     smol_str::SmolStr,
     std::collections::BTreeMap,
-    std::str::FromStr as _,
 };
 
 /// A [`PolicyEngine`] backed by a Cedar [`Authorizer`].
@@ -154,6 +157,106 @@ impl CedarPolicyEngine<OciPolicyProvider, OciPolicyProvider> {
             .build()
             .map_err(|e| plan_datafusion_err!("Failed to build Cedar authorizer: {e}"))?;
         Ok(Self::new(Authorizer::new(config), provider, schema))
+    }
+}
+
+impl CedarPolicyEngine<InMemoryPolicyProvider, InMemoryPolicyProvider> {
+    /// Build a Cedar policy from in-memory sources: a policy set (Cedar policy
+    /// text), an optional entities bundle (Cedar entities JSON), and an optional
+    /// schema (human-readable cedarschema text, the same syntax as a
+    /// `.cedarschema` file).
+    ///
+    /// This is the in-process analog of [`from_oci`](Self::from_oci) — it stands
+    /// up a real engine (the same authorization + TPE governance path) without an
+    /// OCI registry, so hosts can integration-test their fact-sourcing and policy
+    /// wiring against a real Cedar evaluation. Production deployments source their
+    /// policy image from OCI; this is for tests and offline showcases.
+    ///
+    /// A schema is required for the fine-grained governance (row-filter /
+    /// column-mask) path — TPE cannot run without one, so `constrain` fails closed
+    /// when `schema_src` is `None`.
+    pub fn from_sources(
+        policy_src: &str,
+        entities_src: &str,
+        schema_src: Option<&str>,
+    ) -> Result<Self> {
+        let schema = match schema_src {
+            Some(src) => Some(
+                Schema::from_cedarschema_str(src)
+                    .map(|(schema, _warnings)| schema)
+                    .map_err(|e| plan_datafusion_err!("failed to parse Cedar schema: {e}"))?,
+            ),
+            None => None,
+        };
+        let provider = Arc::new(InMemoryPolicyProvider::new(
+            policy_src,
+            entities_src,
+            schema.as_ref(),
+        )?);
+        let config = AuthorizerConfigBuilder::default()
+            .policy_set_provider(provider.clone())
+            .entity_provider(provider.clone())
+            .build()
+            .map_err(|e| plan_datafusion_err!("Failed to build Cedar authorizer: {e}"))?;
+        Ok(Self::new(
+            Authorizer::new(config),
+            provider,
+            schema.map(Arc::new),
+        ))
+    }
+}
+
+/// An in-memory [`SimplePolicySetProvider`] + [`SimpleEntityProvider`] holding a
+/// fixed policy set and entity bundle.
+///
+/// This is the provider behind [`CedarPolicyEngine::from_sources`]: it serves a
+/// static policy set and entities parsed once at construction, with no network or
+/// registry. Intended for tests and offline showcases; production uses the
+/// OCI-backed provider ([`CedarPolicyEngine::from_oci`]).
+#[derive(Debug)]
+pub struct InMemoryPolicyProvider {
+    policies: Arc<PolicySet>,
+    entities: Arc<Entities>,
+}
+
+impl InMemoryPolicyProvider {
+    /// Parse a policy set (Cedar policy text) and an entities bundle (Cedar
+    /// entities JSON, validated against `schema` when supplied). An empty
+    /// `entities_src` yields an empty entity bundle.
+    pub fn new(policy_src: &str, entities_src: &str, schema: Option<&Schema>) -> Result<Self> {
+        let policies = PolicySet::from_str(policy_src)
+            .map_err(|e| plan_datafusion_err!("failed to parse Cedar policy set: {e}"))?;
+        let entities = if entities_src.trim().is_empty() {
+            Entities::empty()
+        } else {
+            Entities::empty()
+                .add_entities_from_json_str(entities_src, schema)
+                .map_err(|e| plan_datafusion_err!("failed to parse Cedar entities: {e}"))?
+        };
+        Ok(Self {
+            policies: Arc::new(policies),
+            entities: Arc::new(entities),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl SimplePolicySetProvider for InMemoryPolicyProvider {
+    async fn get_policy_set(
+        &self,
+        _: &Request,
+    ) -> std::result::Result<Arc<PolicySet>, PolicySetProviderError> {
+        Ok(self.policies.clone())
+    }
+}
+
+#[async_trait::async_trait]
+impl SimpleEntityProvider for InMemoryPolicyProvider {
+    async fn get_entities(
+        &self,
+        _: &Request,
+    ) -> std::result::Result<Arc<Entities>, EntityProviderError> {
+        Ok(self.entities.clone())
     }
 }
 
@@ -1034,6 +1137,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decision, Decision::Deny);
+    }
+
+    // The public in-memory constructor builds a real engine over the showcase
+    // policy without an OCI registry — the host-side integration seam. Same
+    // Layer-1 gate contract as the OCI-backed engine.
+    #[tokio::test]
+    async fn from_sources_builds_a_working_engine() {
+        let pol = CedarPolicyEngine::from_sources(LAKEHOUSE_POLICY, "", None).unwrap();
+        // A principal with a region is permitted; one without is denied.
+        assert_eq!(
+            pol.is_allowed(&scan_plan(), &alice(), &EvalContext::default())
+                .await
+                .unwrap(),
+            Decision::Allow
+        );
+        assert_eq!(
+            pol.is_allowed(
+                &scan_plan(),
+                &PrincipalIdentity::new("User::\"anon\""),
+                &EvalContext::default(),
+            )
+            .await
+            .unwrap(),
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn from_sources_rejects_a_malformed_schema() {
+        assert!(
+            CedarPolicyEngine::from_sources(LAKEHOUSE_POLICY, "", Some("this is not a schema"))
+                .is_err()
+        );
     }
 
     /// Minimal extension node named after a Unity Catalog DDL command, used to
