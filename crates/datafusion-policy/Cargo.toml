@@ -1,0 +1,30 @@
+[package]
+name = "datafusion-policy"
+version = "0.0.1"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+description = "Engine-neutral policy enforcement (access gate + row/column governance) for Apache DataFusion sessions"
+repository = "https://github.com/open-lakehouse/breakwater"
+homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/datafusion-policy"
+documentation = "https://docs.rs/datafusion-policy"
+readme = "README.md"
+keywords = ["datafusion", "authorization", "governance", "policy"]
+categories = ["database", "authentication"]
+
+[dependencies]
+async-trait = { workspace = true }
+dashmap = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+# Layer 2 fine-grained governance (row filters + column masks) + the agent-tool
+# PEP. Off by default; the Cedar (or any) adapter's own `governance` feature
+# enables this one.
+governance = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

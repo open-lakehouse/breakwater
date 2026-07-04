@@ -10,8 +10,9 @@
 //!
 //! The shared-session-scoped facts use the **real** `datafusion_cedar::InMemoryFactStore`
 //! (not a mock), and the principal's group membership is supplied via the real
-//! `PrincipalEnrichment` / `to_entities()` shape the identity PIP produces — the
-//! static entity bundle no longer carries user→group edges. Only the
+//! neutral `PrincipalEnrichment` / `Group` hierarchy the identity PIP produces
+//! (lowered to Cedar entities by `principal_entities`) — the static entity
+//! bundle no longer carries user→group edges. Only the
 //! local-ephemeral facts (catalog identity, columns) are still constructed inline
 //! to keep the example self-contained.
 //!
@@ -53,7 +54,8 @@ use std::sync::Arc;
 
 use cedar_policy::Entity;
 use datafusion_cedar::{
-    CedarResidualTranslator, PrincipalEnrichment, PrincipalIdentity, ResidualTranslator,
+    CedarResidualTranslator, ConstraintTranslator, Group, PrincipalEnrichment, PrincipalIdentity,
+    parse_uid, principal_entities,
 };
 
 // ----------------------------------------------------------------------------
@@ -217,24 +219,22 @@ fn tool_context(observed_taints: &BTreeSet<String>) -> Context {
 /// alice's group closure as the identity PIP would resolve it: alice ∈
 /// privileged_readers ⊂ readers. This is the `PrincipalEnrichment` the hydrofoil
 /// `IdentityProvider` returns; here it replaces the user→group edges that used
-/// to live in the static entity bundle.
+/// to live in the static entity bundle. The hierarchy is expressed in the
+/// engine-neutral `Group` shape; the Cedar adapter rebuilds the entity graph.
 fn alice_enrichment() -> PrincipalEnrichment {
-    let group = |id: &str| {
-        EntityUid::from_type_name_and_id(
-            EntityTypeName::from_str("UserGroup").unwrap(),
-            EntityId::new(id),
-        )
-    };
-    let readers = Entity::new_no_attrs(group("readers"), Default::default());
-    let privileged = Entity::new(
-        group("privileged_readers"),
-        std::collections::HashMap::new(),
-        [group("readers")].into_iter().collect(),
-    )
-    .expect("group entity");
+    let group = |id: &str| format!(r#"UserGroup::"{id}""#);
     PrincipalEnrichment {
         groups: vec![group("privileged_readers")],
-        group_entities: vec![privileged, readers],
+        group_hierarchy: vec![
+            Group {
+                uid: group("privileged_readers"),
+                parents: vec![group("readers")],
+            },
+            Group {
+                uid: group("readers"),
+                parents: vec![],
+            },
+        ],
         ..Default::default()
     }
 }
@@ -292,20 +292,24 @@ async fn main() {
     divider("① Catalog PEP — may alice read protected_table?");
     // alice's group membership is NOT in the static bundle (it was shrunk):
     // the identity PIP resolves her closure (alice ∈ privileged_readers ⊂
-    // readers) and we fold it in via `to_entities()`. This is the real
+    // readers) and we fold it in via `principal_entities`. This is the real
     // `PrincipalEnrichment` shape the hydrofoil `IdentityProvider` returns.
-    let alice = PrincipalIdentity::new(EntityUid::from_str(r#"User::"alice""#).unwrap())
+    let alice = PrincipalIdentity::new(r#"User::"alice""#)
         .with_attribute("region", "eu")
         .enriched(alice_enrichment());
+    // Lower the neutral principal to Cedar types at the boundary (the adapter
+    // helpers the `CedarPolicy` engine uses internally, exposed for hosts that
+    // build requests directly).
+    let alice_uid = parse_uid(&alice.uid).expect("alice uid");
     // The request-time entity set = the static bundle (groups + resource) PLUS
     // alice's dynamically-resolved principal + group closure.
-    let with_principal = merge_entities(&entities, alice.to_entities());
+    let with_principal = merge_entities(&entities, principal_entities(&alice).expect("entities"));
     let baseline = authorizer(
         PolicySet::from_str(&baseline_src).expect("baseline policy set"),
         with_principal.clone(),
     );
     let req = Request::new(
-        alice.uid.clone(),
+        alice_uid.clone(),
         action("read_table"),
         table_resource("protected_table"),
         Context::empty(),
@@ -326,9 +330,10 @@ async fn main() {
 
     // ── Decision point ① (deny path) — prove fail-closed + hierarchy. ────────
     divider("① Catalog PEP (deny path) — may r2d2 *write* protected_table?");
-    let r2d2 = PrincipalIdentity::new(EntityUid::from_str(r#"Agent::"r2d2""#).unwrap());
+    let r2d2 = PrincipalIdentity::new(r#"Agent::"r2d2""#);
+    let r2d2_uid = parse_uid(&r2d2.uid).expect("r2d2 uid");
     let req = Request::new(
-        r2d2.uid.clone(),
+        r2d2_uid.clone(),
         action("write_table"),
         table_resource("protected_table"),
         Context::empty(),
@@ -351,7 +356,7 @@ async fn main() {
     // (local-ephemeral, from the DFSchema / TableScan projection).
     divider("② Engine coarse gate — alice reads protected_table[id, region, ssn]");
     let req = Request::new(
-        alice.uid.clone(),
+        alice_uid.clone(),
         action("read_table"),
         table_resource("protected_table"),
         table_context("main", "sales", "protected_table", &["id", "region", "ssn"]),
@@ -380,13 +385,14 @@ async fn main() {
     // policy references only principal/resource attributes, so no hierarchy is
     // needed here.
     let gov_entities =
-        Entities::from_entities([alice.to_entity()], None).expect("principal entity");
+        Entities::from_entities(principal_entities(&alice).expect("principal entity"), None)
+            .expect("principal entity");
     let gov = authorizer(
         PolicySet::from_str(GOVERNANCE_POLICY).expect("governance policy set"),
         gov_entities.clone(),
     );
     let partial = RequestBuilder::default()
-        .principal(alice.uid.clone())
+        .principal(alice_uid.clone())
         .action(action("read_table"))
         .unknown_resource_with_type(EntityTypeName::from_str("Table").unwrap())
         .context(table_context("main", "sales", "protected_table", &[]))
@@ -441,7 +447,7 @@ async fn main() {
     divider("④ Agent-tool PEP — may the agent call send_external now?");
     let observed = facts.observed_taints(correlation_id);
     let req = RequestBuilder::default()
-        .principal(alice.uid.clone())
+        .principal(alice_uid.clone())
         .action(action("send_external"))
         .resource(table_resource("export_sink"))
         .context(tool_context(&observed))
@@ -459,7 +465,7 @@ async fn main() {
     divider("④ Agent-tool PEP (counterfactual) — fresh session, no taints");
     let clean = BTreeSet::new();
     let req = RequestBuilder::default()
-        .principal(alice.uid.clone())
+        .principal(alice_uid.clone())
         .action(action("send_external"))
         .resource(table_resource("export_sink"))
         .context(tool_context(&clean))

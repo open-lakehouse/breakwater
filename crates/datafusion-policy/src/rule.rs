@@ -15,7 +15,7 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use datafusion_common::{Result, exec_err};
 
-use crate::policy::Policy;
+use crate::engine::PolicyEngine;
 use crate::session::{EvalContextProvider, PrincipalProvider, authorize_and_govern};
 
 /// A [`QueryPlanner`] that governs and gates a query before physical planning.
@@ -27,7 +27,7 @@ use crate::session::{EvalContextProvider, PrincipalProvider, authorize_and_gover
 /// Wrapping an inner planner (rather than owning a `DefaultPhysicalPlanner`) is
 /// what lets this compose with other query-planner-wrapping extensions.
 pub struct PolicyQueryPlanner {
-    policy: Arc<dyn Policy>,
+    policy: Arc<dyn PolicyEngine>,
     principal: Arc<dyn PrincipalProvider>,
     eval: Arc<dyn EvalContextProvider>,
     inner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -45,7 +45,7 @@ impl PolicyQueryPlanner {
     /// Build a planner that enforces `policy` (resolving the principal / eval
     /// context via the providers) and delegates physical planning to `inner`.
     pub fn new(
-        policy: Arc<dyn Policy>,
+        policy: Arc<dyn PolicyEngine>,
         principal: Arc<dyn PrincipalProvider>,
         eval: Arc<dyn EvalContextProvider>,
         inner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -99,17 +99,14 @@ impl QueryPlanner for PolicyQueryPlanner {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
 
-    use cedar_oci::{Decision, EntityUid};
-
-    use crate::policy::StaticPolicy;
+    use crate::engine::StaticPolicyEngine;
     use crate::principal::PrincipalIdentity;
     use crate::session::{PolicyExtension, PolicySessionExt, PrincipalExt};
+    use crate::types::Decision;
 
     /// Register a one-column in-memory table so a `SELECT` has something to plan.
     fn register_table(ctx: &SessionContext) {
@@ -125,13 +122,14 @@ mod tests {
     fn instrumented_ctx(decision: Decision, bind_principal: bool) -> SessionContext {
         let mut state = SessionContext::new().state();
         if bind_principal {
-            let principal = PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap());
+            let principal = PrincipalIdentity::new("User::\"alice\"");
             state
                 .config_mut()
                 .set_extension(std::sync::Arc::new(PrincipalExt(principal)));
         }
         let ctx = SessionContext::new_with_state(state).with_policy(
-            PolicyExtension::builder().policy(std::sync::Arc::new(StaticPolicy::new(decision))),
+            PolicyExtension::builder()
+                .policy(std::sync::Arc::new(StaticPolicyEngine::new(decision))),
         );
         register_table(&ctx);
         ctx

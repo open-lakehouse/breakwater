@@ -14,23 +14,23 @@ categories = ["database", "authentication"]
 
 [dependencies]
 cedar-oci = { workspace = true }
+datafusion-policy = { workspace = true }
 
 async-trait = { workspace = true }
 cedar-local-agent = { workspace = true }
 cedar-policy = { workspace = true }
-dashmap = { workspace = true }
 datafusion = { workspace = true }
-datafusion-common = { workspace = true }
 serde_json = { workspace = true, optional = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [features]
 default = []
 # Layer 2 fine-grained governance (row filters + column masks) via Cedar
-# partial evaluation. Off by default; pulls the partial-eval feature through
-# the cedar stack when enabled, and the residual translator (serde_json).
+# partial evaluation. Off by default; enables governance in the neutral core,
+# pulls the partial-eval feature through the cedar stack, and the residual
+# translator (serde_json).
 governance = [
+    "datafusion-policy/governance",
     "cedar-policy/partial-eval",
     "cedar-local-agent/partial-eval",
     "dep:serde_json",

@@ -9,12 +9,22 @@ use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::TableReference;
 
-use cedar_oci::{Decision, OciPolicyProvider};
+use cedar_oci::OciPolicyProvider;
 
-use crate::facts::{EvalContext, TableFacts};
-use crate::policy::Policy;
-use crate::principal::PrincipalIdentity;
+use datafusion_policy::{Decision, EvalContext, PolicyEngine, PrincipalIdentity, TableFacts};
+
+use crate::cedar_entity::principal_entities;
 use crate::visitor::{PlanRequest, authorize_plan, table_resource_uid};
+
+/// Map Cedar's native decision onto the neutral [`Decision`]. Cedar has exactly
+/// two variants; anything that is not an explicit `Allow` is treated as `Deny`
+/// (fail-closed).
+fn neutral_decision(decision: cedar_policy::Decision) -> Decision {
+    match decision {
+        cedar_policy::Decision::Allow => Decision::Allow,
+        cedar_policy::Decision::Deny => Decision::Deny,
+    }
+}
 
 /// Build the request-time `Table` resource entity carrying the catalog facts,
 /// so policies can resolve `resource.owner/readers/writers/tags/column_tags`.
@@ -63,20 +73,20 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
 
 #[cfg(feature = "governance")]
 use {
-    crate::govern::TablePolicy,
-    crate::translate::{CedarResidualTranslator, ResidualTranslator},
+    crate::translate::CedarResidualTranslator,
     cedar_policy::{EntityTypeName, Request, RequestBuilder},
     datafusion::common::DFSchema,
     datafusion::logical_expr::lit,
+    datafusion_policy::{ConstraintTranslator, TablePolicy},
     std::str::FromStr as _,
 };
 
-/// A [`Policy`] backed by a Cedar [`Authorizer`].
+/// A [`PolicyEngine`] backed by a Cedar [`Authorizer`].
 ///
 /// Generic over any policy-set and entity provider (e.g. `cedar-oci`'s
 /// [`OciPolicyProvider`]), so the policy source is pluggable.
 #[derive(Debug)]
-pub struct CedarPolicy<P, E>
+pub struct CedarPolicyEngine<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -84,7 +94,7 @@ where
     authorizer: Authorizer<P, E>,
 }
 
-impl<P, E> CedarPolicy<P, E>
+impl<P, E> CedarPolicyEngine<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -94,7 +104,7 @@ where
     }
 }
 
-impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
+impl CedarPolicyEngine<OciPolicyProvider, OciPolicyProvider> {
     /// Build a Cedar policy that sources its policy set, schema, and entities
     /// from an OCI registry reference (e.g.
     /// `localhost:10100/hydrofoil/plan-policy:latest`).
@@ -118,7 +128,7 @@ impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
 }
 
 #[async_trait::async_trait]
-impl<P, E> Policy for CedarPolicy<P, E>
+impl<P, E> PolicyEngine for CedarPolicyEngine<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -138,7 +148,7 @@ where
             // table with gathered catalog facts — the `Table` resource entity
             // carrying `resource.owner/readers/writers/tags/column_tags`.
             // cedar-local-agent merges these with the entities the provider vends.
-            let mut entities = principal.to_entities();
+            let mut entities = principal_entities(principal)?;
             if let Some(table_ref) = &table
                 && let Some(facts) = eval.catalog_facts.get(table_ref)
                 && let Some(entity) = table_entity(table_ref, &facts)
@@ -155,7 +165,7 @@ where
                 .is_authorized(&request, &request_entities)
                 .await
             {
-                Ok(response) => response.decision(),
+                Ok(response) => neutral_decision(response.decision()),
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -172,7 +182,7 @@ where
     }
 
     #[cfg(feature = "governance")]
-    async fn table_policy(
+    async fn constrain(
         &self,
         table: &TableReference,
         _schema: &DFSchema,
@@ -199,13 +209,13 @@ where
         let context = crate::visitor::table_context(table, &[])?;
 
         let request = RequestBuilder::default()
-            .principal(principal.uid.clone())
+            .principal(crate::cedar_entity::parse_uid(&principal.uid)?)
             .action(read_action)
             .unknown_resource_with_type(table_type)
             .context(context)
             .build();
 
-        let principal_entities = Entities::from_entities(principal.to_entities(), None)
+        let principal_entities = Entities::from_entities(principal_entities(principal)?, None)
             .unwrap_or_else(|_| Entities::empty());
 
         let response = match self
@@ -297,10 +307,16 @@ where
             EntityId::new(action),
         );
         let context = crate::visitor::tool_context(observed_taints)?;
-        let request = Request::new(principal.uid.clone(), action_uid, resource, context, None)
-            .map_err(|e| plan_datafusion_err!("Failed to create tool request: {e}"))?;
+        let request = Request::new(
+            crate::cedar_entity::parse_uid(&principal.uid)?,
+            action_uid,
+            resource,
+            context,
+            None,
+        )
+        .map_err(|e| plan_datafusion_err!("Failed to create tool request: {e}"))?;
 
-        let principal_entities = Entities::from_entities(principal.to_entities(), None)
+        let principal_entities = Entities::from_entities(principal_entities(principal)?, None)
             .unwrap_or_else(|_| Entities::empty());
 
         // Fail closed: an authorizer error denies the tool call.
@@ -309,7 +325,7 @@ where
             .is_authorized(&request, &principal_entities)
             .await
         {
-            Ok(response) => Ok(response.decision()),
+            Ok(response) => Ok(neutral_decision(response.decision())),
             Err(e) => {
                 tracing::warn!(error = %e, action, "tool authorization failed; denying (fail-closed)");
                 Ok(Decision::Deny)
@@ -327,12 +343,12 @@ mod tests {
     use cedar_local_agent::public::{
         EntityProviderError, PolicySetProviderError, SimpleEntityProvider, SimplePolicySetProvider,
     };
-    use cedar_policy::{Entities, EntityUid, PolicySet, Request};
+    use cedar_policy::{Entities, PolicySet, Request};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::logical_plan::builder::table_scan;
 
     use super::*;
-    use crate::principal::PrincipalIdentity;
+    use datafusion_policy::PrincipalIdentity;
 
     /// In-memory provider holding a fixed policy set + entities, for tests.
     #[derive(Debug)]
@@ -386,7 +402,7 @@ mod tests {
         }
     }
 
-    fn policy<P, E>(p: P, e: E) -> CedarPolicy<P, E>
+    fn policy<P, E>(p: P, e: E) -> CedarPolicyEngine<P, E>
     where
         P: SimplePolicySetProvider + 'static,
         E: SimpleEntityProvider + 'static,
@@ -396,12 +412,11 @@ mod tests {
             .entity_provider(Arc::new(e))
             .build()
             .unwrap();
-        CedarPolicy::new(Authorizer::new(config))
+        CedarPolicyEngine::new(Authorizer::new(config))
     }
 
     fn alice() -> PrincipalIdentity {
-        PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap())
-            .with_attribute("region", "eu")
+        PrincipalIdentity::new("User::\"alice\"").with_attribute("region", "eu")
     }
 
     fn scan_plan() -> LogicalPlan {
@@ -462,8 +477,8 @@ mod tests {
 
     /// An `EvalContext` whose sink records `facts` for the bare table `t` that
     /// `scan_plan()` reads.
-    fn eval_with_table_facts(facts: crate::TableFacts) -> EvalContext {
-        let sink = crate::CatalogFactSink::new();
+    fn eval_with_table_facts(facts: datafusion_policy::TableFacts) -> EvalContext {
+        let sink = datafusion_policy::CatalogFactSink::new();
         sink.record(TableReference::bare("t"), facts);
         EvalContext {
             catalog_facts: sink,
@@ -484,7 +499,7 @@ mod tests {
             InMemory::new(""),
         );
 
-        let facts = crate::TableFacts {
+        let facts = datafusion_policy::TableFacts {
             tags: ["pii".to_string()].into_iter().collect(),
             ..Default::default()
         };
@@ -513,7 +528,7 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let facts = crate::TableFacts {
+        let facts = datafusion_policy::TableFacts {
             readers: ["User::\"alice\"".to_string()].into_iter().collect(),
             ..Default::default()
         };
@@ -531,10 +546,11 @@ mod tests {
 
     #[tokio::test]
     async fn is_allowed_resolves_group_membership_with_empty_bundle() {
-        use cedar_policy::Entity;
+        use datafusion_policy::Group;
         // The entity provider vends NO entities; alice's `readers` membership
         // exists only in the enrichment closure (alice ∈ privileged_readers ⊂
-        // readers), supplied request-time via `to_entities()`.
+        // readers), supplied request-time via the neutral group hierarchy that
+        // the adapter rebuilds into Cedar entities.
         let pol = policy(
             InMemory::new(
                 r#"permit(principal in UserGroup::"readers", action == Action::"read_table", resource);"#,
@@ -542,21 +558,18 @@ mod tests {
             InMemory::new(""),
         );
 
-        let readers = Entity::new_no_attrs(
-            EntityUid::from_str("UserGroup::\"readers\"").unwrap(),
-            Default::default(),
-        );
-        let privileged = Entity::new(
-            EntityUid::from_str("UserGroup::\"privileged_readers\"").unwrap(),
-            std::collections::HashMap::new(),
-            [EntityUid::from_str("UserGroup::\"readers\"").unwrap()]
-                .into_iter()
-                .collect(),
-        )
-        .unwrap();
-        let enriched = alice().enriched(crate::PrincipalEnrichment {
-            groups: vec![EntityUid::from_str("UserGroup::\"privileged_readers\"").unwrap()],
-            group_entities: vec![privileged, readers],
+        let enriched = alice().enriched(datafusion_policy::PrincipalEnrichment {
+            groups: vec!["UserGroup::\"privileged_readers\"".into()],
+            group_hierarchy: vec![
+                Group {
+                    uid: "UserGroup::\"privileged_readers\"".into(),
+                    parents: vec!["UserGroup::\"readers\"".into()],
+                },
+                Group {
+                    uid: "UserGroup::\"readers\"".into(),
+                    parents: vec![],
+                },
+            ],
             ..Default::default()
         });
 
@@ -597,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn demo_policy_gate_denies_principal_without_region() {
         let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
-        let carol = PrincipalIdentity::new(EntityUid::from_str("User::\"carol\"").unwrap());
+        let carol = PrincipalIdentity::new("User::\"carol\"");
         let decision = pol
             .is_allowed(&scan_plan(), &carol, &EvalContext::default())
             .await
@@ -734,7 +747,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
@@ -753,7 +766,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("***")));
@@ -772,7 +785,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("REDACTED")));
@@ -791,7 +804,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -809,7 +822,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -826,7 +839,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -838,15 +851,14 @@ mod tests {
         // so the demo can't silently rot. (`DEMO_POLICY` comes from `super`.)
 
         fn bob() -> PrincipalIdentity {
-            PrincipalIdentity::new(EntityUid::from_str("User::\"bob\"").unwrap())
-                .with_attribute("region", "us")
+            PrincipalIdentity::new("User::\"bob\"").with_attribute("region", "us")
         }
 
         #[tokio::test]
         async fn demo_policy_alice_eu_sees_eu_rows_ssn_masked() {
             let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             // Row filter restricts to the principal's region (eu).
@@ -860,7 +872,7 @@ mod tests {
         async fn demo_policy_bob_us_sees_us_rows_ssn_masked() {
             let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &bob(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &bob(), &EvalContext::default())
                 .await
                 .unwrap();
             // Row filter restricts to the principal's region (us) — the
