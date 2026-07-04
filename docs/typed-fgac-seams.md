@@ -51,6 +51,13 @@ PIP behind those neutral facts. Tag inheritance (catalog→schema→table) is
 pre-resolved by the host into these facts (column tags applied directly, matching
 UC).
 
+> **Status:** column-level governed tags are folded into the `Column` resource
+> entity today, so `read_column` tag matching works. Table-level
+> `governed_tags` are **not yet** folded into the `read_table` residual path
+> (the row-filter request keeps the `Table` resource unknown, which has no uid
+> to attach tags to) — so a `FOR TABLES WHEN has_tag_value(...)` row filter is
+> not functional yet. See `table_residuals` in `cedar.rs`.
+
 ## Type-aware partial evaluation (TPE)
 
 The `fgac` feature uses Cedar's **type-aware partial evaluation** (`PolicySet::tpe`,
@@ -116,7 +123,7 @@ Every ambiguity denies rather than exposes data:
 | UC `CREATE POLICY` clause | breakwater equivalent |
 |---|---|
 | `TO principal … EXCEPT …` | permit/forbid scope + `unless { principal.… }` |
-| `FOR TABLES WHEN has_tag_value(k,v)` | `read_table` residual `when { resource.hasTag("k") && resource.getTag("k") == "v" }` |
+| `FOR TABLES WHEN has_tag_value(k,v)` | `read_table` residual `when { resource.hasTag("k") && resource.getTag("k") == "v" }` *(table tag folding not yet wired — see status note above)* |
 | `MATCH COLUMNS has_tag_value(k,v) AS a` | `read_column` residual over a `Column` whose `getTag` matches |
 | `ROW FILTER f` / `COLUMN MASK f` | `@row_filter_fn` / `@mask_fn` **or** `Tag.default_*_fn` → resolved `ScalarUDF` |
 | matched column = fn's 1st arg | masked `col(name)` is argument 0 |

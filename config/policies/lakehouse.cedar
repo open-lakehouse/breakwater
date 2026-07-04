@@ -55,7 +55,10 @@ unless { principal has clearance && principal.clearance == "high" };
 
 // ---------------------------------------------------------------------------
 // COLUMN MASK — resolution level 2 (tag-default function).
-// No @mask_fn here; the matched Tag entity's `default_mask_fn` supplies the UDF.
+// No @mask_fn here; the matched Tag entity's `default_mask_fn` is intended to
+// supply the UDF. NOTE: the level-2 tag-default lookup is a not-yet-wired seam
+// (see `CedarPolicyEngine::tag_default_mask_fn`), so today this forbid resolves
+// to the level-3 default literal ("***") until that hook is implemented.
 // ---------------------------------------------------------------------------
 forbid (
     principal,
