@@ -1,8 +1,8 @@
 //! Cedar policy enforcement for Apache DataFusion.
 //!
-//! This crate is the DataFusion-aware, reusable half of the policy stack — the
-//! policy analog of `datafusion-openlineage`. It owns the [`Policy`] trait, the
-//! Cedar-backed implementation ([`CedarPolicy`]), and the
+//! This crate is the Cedar **adapter** for the engine-neutral policy layer: it
+//! implements the [`PolicyEngine`] decide contract (owned by the neutral core)
+//! with a Cedar-backed implementation ([`CedarPolicy`]), plus the
 //! [`LogicalPlan`](datafusion::logical_expr::LogicalPlan) walk that turns a
 //! query into a set of Cedar authorization requests. Policy *sourcing* (pulling
 //! a policy set / schema / entities from an OCI registry) lives in the
@@ -13,7 +13,7 @@
 //!
 //! Two layers:
 //!
-//! - **Layer 1 — coarse access gate** ([`Policy::is_allowed`]): does the
+//! - **Layer 1 — coarse access gate** ([`PolicyEngine::is_allowed`]): does the
 //!   principal have access to the tables/actions a query references?
 //! - **Layer 2 — fine-grained governance** (feature `governance`): row filters
 //!   and column masks derived from Cedar partial-evaluation residuals.
@@ -38,7 +38,7 @@ mod translate;
 pub use cedar::CedarPolicy;
 pub use cedar_entity::{parse_uid, principal_entities};
 pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
-pub use policy::{Policy, StaticPolicy};
+pub use policy::{PolicyEngine, StaticPolicyEngine};
 pub use principal::{
     AgentClaims, Group, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
     PrincipalIdentity,
@@ -58,7 +58,7 @@ pub use govern::{TablePolicy, govern_plan};
 #[cfg(feature = "governance")]
 pub use session::FactStoreExt;
 #[cfg(feature = "governance")]
-pub use translate::{CedarResidualTranslator, ResidualTranslator};
+pub use translate::{CedarResidualTranslator, ConstraintTranslator};
 
 // Re-export the cedar identity types through this crate so consumers building
 // Cedar-shaped principals have a single import surface (they originate in

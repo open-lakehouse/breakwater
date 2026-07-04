@@ -54,7 +54,7 @@ use std::sync::Arc;
 
 use cedar_policy::Entity;
 use datafusion_cedar::{
-    CedarResidualTranslator, Group, PrincipalEnrichment, PrincipalIdentity, ResidualTranslator,
+    CedarResidualTranslator, ConstraintTranslator, Group, PrincipalEnrichment, PrincipalIdentity,
     parse_uid, principal_entities,
 };
 

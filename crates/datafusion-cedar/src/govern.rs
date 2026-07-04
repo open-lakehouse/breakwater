@@ -18,15 +18,26 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
 use crate::facts::EvalContext;
-use crate::policy::Policy;
+use crate::policy::PolicyEngine;
 use crate::principal::PrincipalIdentity;
 
 /// The fine-grained enforcement that applies to one table for one principal.
+///
+/// This is the engine-neutral carrier every [`PolicyEngine`](crate::PolicyEngine)
+/// reduces its native fine-grained shape to: a Cedar residual boolean, an OPA
+/// residual, or an OpenFGA `ListObjects` id set all land in `row_filters` /
+/// `column_masks` as DataFusion [`Expr`]s.
 #[derive(Debug, Clone, Default)]
 pub struct TablePolicy {
     /// Conjunctive row-filter predicates over the table's columns. Principal
     /// attributes are already folded to literals; only `resource.<col>`
     /// references remain (as `col(<col>)`).
+    ///
+    /// Any boolean [`Expr`] over the table's columns is a valid shape. Besides
+    /// comparisons (`col("region").eq(lit("eu"))`), a *set-membership* filter
+    /// `col("id").in_list(vec![...], false)` is explicitly supported — this is
+    /// how an OpenFGA adapter would enforce a `ListObjects` permitted-id set as a
+    /// semi-join-style row filter.
     pub row_filters: Vec<Expr>,
     /// Column name -> replacement expression for masked columns. The expression
     /// must not be a bare column (else the optimizer may absorb the projection);
@@ -64,7 +75,7 @@ impl TreeNodeVisitor<'_> for TableCollector {
 /// rewrite the plan. Returns the plan unchanged when nothing is governed.
 pub async fn govern_plan(
     plan: &LogicalPlan,
-    policy: &dyn Policy,
+    policy: &dyn PolicyEngine,
     principal: &PrincipalIdentity,
     eval: &EvalContext,
 ) -> Result<LogicalPlan> {
@@ -86,7 +97,7 @@ pub async fn govern_plan(
             continue;
         }
         let tp = policy
-            .table_policy(&table, schema.as_ref(), principal, eval)
+            .constrain(&table, schema.as_ref(), principal, eval)
             .await?;
         if !tp.is_empty() {
             policies.insert(table, tp);
@@ -189,7 +200,7 @@ mod tests {
     struct FixedPolicy(TablePolicy);
 
     #[async_trait::async_trait]
-    impl Policy for FixedPolicy {
+    impl PolicyEngine for FixedPolicy {
         async fn is_allowed(
             &self,
             _plan: &LogicalPlan,
@@ -198,7 +209,7 @@ mod tests {
         ) -> DFResult<Decision> {
             Ok(Decision::Allow)
         }
-        async fn table_policy(
+        async fn constrain(
             &self,
             _table: &TableReference,
             _schema: &DFSchema,
@@ -393,7 +404,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Policy for PerTablePolicy {
+    impl PolicyEngine for PerTablePolicy {
         async fn is_allowed(
             &self,
             _plan: &LogicalPlan,
@@ -402,7 +413,7 @@ mod tests {
         ) -> DFResult<Decision> {
             Ok(Decision::Allow)
         }
-        async fn table_policy(
+        async fn constrain(
             &self,
             table: &TableReference,
             _schema: &DFSchema,

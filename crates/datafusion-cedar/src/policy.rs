@@ -10,19 +10,25 @@ use datafusion::common::DFSchema;
 #[cfg(feature = "governance")]
 use datafusion::sql::TableReference;
 
-/// Access-control policy applied during query planning.
+/// The **decide** contract every policy engine implements — the engine-agnostic
+/// seam the enforcement layer talks to.
 ///
-/// Layer 1 of the policy stack: a coarse allow/deny over the tables and actions
-/// a query references. Implementations inspect the [`LogicalPlan`] and decide
-/// whether `principal` may execute it. The principal is passed as a
+/// This is the "decide" half of the decide/enforce split: a
+/// [`PolicyEngine`] answers *what is allowed* (coarse gate) and *what
+/// constraints apply* (fine-grained row filters + column masks), and the
+/// enforcement layer (the [`QueryPlanner`](crate::PolicyQueryPlanner) wrapper +
+/// the plan rewrite) applies the answers. The trait names no engine type — a
+/// Cedar adapter ([`CedarPolicy`](crate::CedarPolicy)) implements it today, and
+/// an OPA or OpenFGA adapter could implement it without touching enforcement.
+///
+/// Layer 1 is the coarse allow/deny of [`is_allowed`](PolicyEngine::is_allowed)
+/// over the tables/actions a query references; the principal is passed as a
 /// [`PrincipalIdentity`] (uid + attributes) so attribute-based policies
-/// (`principal.role == ...`) can be evaluated.
-///
-/// With the `governance` feature, the trait also exposes [`Policy::table_policy`]
-/// (Layer 2): the per-table row filters and column masks that apply to a
-/// principal's access.
+/// (`principal.role == ...`) can be evaluated. With the `governance` feature the
+/// trait also exposes [`constrain`](PolicyEngine::constrain) (Layer 2) and
+/// [`tool_policy`](PolicyEngine::tool_policy) (the agent-tool PEP).
 #[async_trait::async_trait]
-pub trait Policy: std::fmt::Debug + Send + Sync {
+pub trait PolicyEngine: std::fmt::Debug + Send + Sync {
     /// Decide whether `principal` may execute `logical_plan`.
     ///
     /// `eval` carries the per-query facts gathered outside the plan — the
@@ -36,13 +42,17 @@ pub trait Policy: std::fmt::Debug + Send + Sync {
         eval: &EvalContext,
     ) -> Result<Decision>;
 
-    /// Resolve the fine-grained enforcement (row filters + column masks) that
-    /// apply when `principal` reads `table` with schema `schema`.
+    /// Resolve the fine-grained constraints (row filters + column masks) that
+    /// apply when `principal` reads `table` with schema `schema`, as a neutral
+    /// [`TablePolicy`](crate::govern::TablePolicy) carrier.
     ///
-    /// Default: no fine-grained enforcement. The Cedar implementation derives
+    /// Every engine reduces its native fine-grained shape to this carrier: a
+    /// Cedar partial-eval residual boolean, an OPA `/v1/compile` residual, or an
+    /// OpenFGA `ListObjects` id set (as a `col(id).in_list(...)` row filter) all
+    /// land here. Default: no constraints. The Cedar implementation derives
     /// filters and masks from policy residuals; see `crate::govern`.
     #[cfg(feature = "governance")]
-    async fn table_policy(
+    async fn constrain(
         &self,
         _table: &TableReference,
         _schema: &DFSchema,
@@ -72,23 +82,24 @@ pub trait Policy: std::fmt::Debug + Send + Sync {
     }
 }
 
-/// A [`Policy`] that returns the same decision for every query.
+/// A [`PolicyEngine`] that returns the same decision for every query.
 ///
-/// Used as the default when no real policy engine is wired (e.g.
-/// `StaticPolicy::new(Decision::Allow)` for an open, ungoverned server).
+/// The non-engine implementation that proves the trait needs no policy engine:
+/// used as the default when nothing real is wired (e.g.
+/// `StaticPolicyEngine::new(Decision::Allow)` for an open, ungoverned server).
 #[derive(Debug, Clone)]
-pub struct StaticPolicy {
+pub struct StaticPolicyEngine {
     decision: Decision,
 }
 
-impl StaticPolicy {
+impl StaticPolicyEngine {
     pub fn new(decision: Decision) -> Self {
         Self { decision }
     }
 }
 
 #[async_trait::async_trait]
-impl Policy for StaticPolicy {
+impl PolicyEngine for StaticPolicyEngine {
     async fn is_allowed(
         &self,
         _logical_plan: &LogicalPlan,
@@ -110,10 +121,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn static_policy_returns_its_decision() {
+    async fn static_engine_returns_its_decision() {
         let plan = LogicalPlanBuilder::empty(false).build().unwrap();
-        let allow = StaticPolicy::new(Decision::Allow);
-        let deny = StaticPolicy::new(Decision::Deny);
+        let allow = StaticPolicyEngine::new(Decision::Allow);
+        let deny = StaticPolicyEngine::new(Decision::Deny);
         assert_eq!(
             allow
                 .is_allowed(&plan, &principal(), &EvalContext::default())

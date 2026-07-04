@@ -25,7 +25,7 @@ use cedar_policy::Policy;
 /// A seam: the default [`CedarResidualTranslator`] reads Cedar EST JSON, but a
 /// future `CelTranslator` (consuming Policast-style CEL manifests) could
 /// implement the same trait without touching the enforcement layer.
-pub trait ResidualTranslator: std::fmt::Debug + Send + Sync {
+pub trait ConstraintTranslator: std::fmt::Debug + Send + Sync {
     /// Translate the residual's condition into a row-filter predicate
     /// (`resource.<attr>` mapped to `col(<attr>)`). `None` means the residual
     /// is trivially true (no filter needed).
@@ -36,7 +36,7 @@ pub trait ResidualTranslator: std::fmt::Debug + Send + Sync {
 #[derive(Debug, Default)]
 pub struct CedarResidualTranslator;
 
-impl ResidualTranslator for CedarResidualTranslator {
+impl ConstraintTranslator for CedarResidualTranslator {
     fn to_predicate(&self, residual: &Policy) -> Result<Option<Expr>> {
         let json = residual
             .to_json()

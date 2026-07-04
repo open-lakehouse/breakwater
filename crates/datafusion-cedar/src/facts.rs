@@ -120,7 +120,7 @@ impl CatalogFactSink {
     }
 }
 
-/// Per-query, non-plan facts threaded into the [`Policy`](crate::Policy) layer.
+/// Per-query, non-plan facts threaded into the [`PolicyEngine`](crate::PolicyEngine) layer.
 ///
 /// This is the single seam carrying everything a Cedar evaluation needs beyond
 /// the plan and principal: the catalog facts gathered this query, the

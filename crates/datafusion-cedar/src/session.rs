@@ -1,7 +1,7 @@
 //! The customer-facing entry point: [`PolicyExtension::builder`].
 //!
 //! One builder assembles the pieces a policy integration needs — a
-//! [`Policy`], a [`PrincipalProvider`], and an [`EvalContextProvider`] — and
+//! [`PolicyEngine`], a [`PrincipalProvider`], and an [`EvalContextProvider`] — and
 //! installs them on a `SessionState` by wrapping its [`QueryPlanner`] with a
 //! [`PolicyQueryPlanner`]. This is the policy analog of
 //! `datafusion_openlineage`'s `OpenLineage::builder(…).instrument(state)`: the
@@ -27,7 +27,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, exec_err};
 
 use crate::facts::{CatalogFactSink, EvalContext};
-use crate::policy::{Policy, StaticPolicy};
+use crate::policy::{PolicyEngine, StaticPolicyEngine};
 use crate::principal::PrincipalIdentity;
 use crate::rule::PolicyQueryPlanner;
 use crate::types::Decision;
@@ -135,7 +135,7 @@ impl EvalContextProvider for SessionConfigEvalContextProvider {
 #[cfg(feature = "governance")]
 async fn govern_plan(
     plan: &LogicalPlan,
-    policy: &dyn Policy,
+    policy: &dyn PolicyEngine,
     principal: &PrincipalIdentity,
     eval: &EvalContext,
 ) -> Result<LogicalPlan> {
@@ -145,7 +145,7 @@ async fn govern_plan(
 #[cfg(not(feature = "governance"))]
 async fn govern_plan(
     plan: &LogicalPlan,
-    _policy: &dyn Policy,
+    _policy: &dyn PolicyEngine,
     _principal: &PrincipalIdentity,
     _eval: &EvalContext,
 ) -> Result<LogicalPlan> {
@@ -167,7 +167,7 @@ async fn govern_plan(
 pub async fn authorize_and_govern(
     state: &SessionState,
     plan: &LogicalPlan,
-    policy: &dyn Policy,
+    policy: &dyn PolicyEngine,
     principal: &PrincipalIdentity,
     eval: &EvalContext,
 ) -> Result<LogicalPlan> {
@@ -200,11 +200,11 @@ impl PolicyExtension {
 ///
 /// Set a policy and, optionally, the principal / eval-context providers; then
 /// call [`Self::instrument`]. The providers default to the `SessionConfig`
-/// read-backs, and the policy defaults to `StaticPolicy(Allow)` (an ungoverned
+/// read-backs, and the policy defaults to `StaticPolicyEngine(Allow)` (an ungoverned
 /// session).
 #[derive(Default)]
 pub struct PolicyBuilder {
-    policy: Option<Arc<dyn Policy>>,
+    policy: Option<Arc<dyn PolicyEngine>>,
     principal: Option<Arc<dyn PrincipalProvider>>,
     eval: Option<Arc<dyn EvalContextProvider>>,
 }
@@ -220,8 +220,8 @@ impl std::fmt::Debug for PolicyBuilder {
 }
 
 impl PolicyBuilder {
-    /// Set the policy to enforce. Defaults to `StaticPolicy(Allow)`.
-    pub fn policy(mut self, policy: Arc<dyn Policy>) -> Self {
+    /// Set the policy to enforce. Defaults to `StaticPolicyEngine(Allow)`.
+    pub fn policy(mut self, policy: Arc<dyn PolicyEngine>) -> Self {
         self.policy = Some(policy);
         self
     }
@@ -252,7 +252,7 @@ impl PolicyBuilder {
     pub fn instrument(self, state: SessionState) -> SessionState {
         let policy = self
             .policy
-            .unwrap_or_else(|| Arc::new(StaticPolicy::new(Decision::Allow)));
+            .unwrap_or_else(|| Arc::new(StaticPolicyEngine::new(Decision::Allow)));
         let principal = self
             .principal
             .unwrap_or_else(|| Arc::new(SessionConfigPrincipalProvider));
@@ -278,7 +278,7 @@ impl PolicyBuilder {
 /// hold the pieces. Prefer the builder for new code.
 pub fn instrument_session_state(
     state: SessionState,
-    policy: Arc<dyn Policy>,
+    policy: Arc<dyn PolicyEngine>,
     principal: Arc<dyn PrincipalProvider>,
     eval: Arc<dyn EvalContextProvider>,
 ) -> SessionState {
@@ -295,7 +295,7 @@ pub fn instrument_session_state(
 /// one consume-and-return call, mirroring `datafusion_openlineage`'s
 /// `OpenLineageSqlExt::with_lineage` and DataFusion's own
 /// `SessionContext::enable_url_table(self) -> Self`. `None` uses defaults (a
-/// `StaticPolicy(Allow)` and the `SessionConfig` read-back providers).
+/// `StaticPolicyEngine(Allow)` and the `SessionConfig` read-back providers).
 pub trait PolicySessionExt: Sized {
     /// Instrument this context with policy enforcement and return it.
     ///

@@ -13,7 +13,7 @@ use cedar_oci::OciPolicyProvider;
 
 use crate::cedar_entity::principal_entities;
 use crate::facts::{EvalContext, TableFacts};
-use crate::policy::Policy;
+use crate::policy::PolicyEngine;
 use crate::principal::PrincipalIdentity;
 use crate::types::Decision;
 use crate::visitor::{PlanRequest, authorize_plan, table_resource_uid};
@@ -76,14 +76,14 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
 #[cfg(feature = "governance")]
 use {
     crate::govern::TablePolicy,
-    crate::translate::{CedarResidualTranslator, ResidualTranslator},
+    crate::translate::{CedarResidualTranslator, ConstraintTranslator},
     cedar_policy::{EntityTypeName, Request, RequestBuilder},
     datafusion::common::DFSchema,
     datafusion::logical_expr::lit,
     std::str::FromStr as _,
 };
 
-/// A [`Policy`] backed by a Cedar [`Authorizer`].
+/// A [`PolicyEngine`] backed by a Cedar [`Authorizer`].
 ///
 /// Generic over any policy-set and entity provider (e.g. `cedar-oci`'s
 /// [`OciPolicyProvider`]), so the policy source is pluggable.
@@ -130,7 +130,7 @@ impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
 }
 
 #[async_trait::async_trait]
-impl<P, E> Policy for CedarPolicy<P, E>
+impl<P, E> PolicyEngine for CedarPolicy<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -184,7 +184,7 @@ where
     }
 
     #[cfg(feature = "governance")]
-    async fn table_policy(
+    async fn constrain(
         &self,
         table: &TableReference,
         _schema: &DFSchema,
@@ -749,7 +749,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
@@ -768,7 +768,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("***")));
@@ -787,7 +787,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit("REDACTED")));
@@ -806,7 +806,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -824,7 +824,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -841,7 +841,7 @@ mod tests {
                 InMemory::new(""),
             );
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             assert_eq!(tp.row_filters, vec![lit(false)]);
@@ -860,7 +860,7 @@ mod tests {
         async fn demo_policy_alice_eu_sees_eu_rows_ssn_masked() {
             let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &alice(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &alice(), &EvalContext::default())
                 .await
                 .unwrap();
             // Row filter restricts to the principal's region (eu).
@@ -874,7 +874,7 @@ mod tests {
         async fn demo_policy_bob_us_sees_us_rows_ssn_masked() {
             let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
             let tp = pol
-                .table_policy(&table(), &empty_schema(), &bob(), &EvalContext::default())
+                .constrain(&table(), &empty_schema(), &bob(), &EvalContext::default())
                 .await
                 .unwrap();
             // Row filter restricts to the principal's region (us) — the
