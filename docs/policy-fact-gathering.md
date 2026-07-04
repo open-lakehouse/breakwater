@@ -207,7 +207,8 @@ demonstrates fact-gathering *and* evaluation, not a scripted output.
 
 - **Fail-closed across the gather step.** A PIP that can't be reached must deny or
   mask, never open. The example's fail-closed posture (deny on untranslatable
-  residual, deny on missing `@filter_type`) mirrors `cedar::table_policy`.
+  residual, deny on TPE error, mask on an unresolvable function) mirrors
+  `cedar::constrain`. See [typed FGAC seams](typed-fgac-seams.md).
 - **Stale local catalog facts.** Baked-in entity attributes can lag the catalog;
   state a freshness posture per the platform doc's static-vs-live tradeoff.
 - **Taint over-accrual.** A monotonic ledger that never clears locks a session
@@ -227,7 +228,8 @@ demonstrates fact-gathering *and* evaluation, not a scripted output.
   PIPs, correlation, taint model, agentic authorization).
 - `docs/adr/0006-policy-fact-locality-and-session-state.md` — the locality/lifetime
   classification and the carry-residual vs. re-evaluate decision, with tradeoffs.
-- `docs/policy-enforcement-design.md` — the two-layer engine enforcement this
-  builds on.
+- `docs/typed-fgac-seams.md` — how typed residuals + governed tags + catalog
+  functions lower to row filters and column masks (the two-layer enforcement this
+  builds on).
 - `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs` — the runnable
   validation of this design.
