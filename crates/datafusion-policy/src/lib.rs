@@ -38,6 +38,8 @@ mod types;
 #[cfg(feature = "fgac")]
 mod fact_store;
 #[cfg(feature = "fgac")]
+mod function;
+#[cfg(feature = "fgac")]
 pub mod govern;
 
 pub use constraint::ConstraintTranslator;
@@ -59,6 +61,8 @@ pub use types::{AttrValue, Decision};
 #[cfg(feature = "fgac")]
 pub use fact_store::{FactStore, InMemoryFactStore};
 #[cfg(feature = "fgac")]
+pub use function::CatalogFunctionResolver;
+#[cfg(feature = "fgac")]
 pub use govern::{TablePolicy, govern_plan};
 #[cfg(feature = "fgac")]
-pub use session::FactStoreExt;
+pub use session::{FactStoreExt, FunctionResolverExt};
