@@ -105,11 +105,12 @@ mod tests {
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
 
-    use cedar_oci::{Decision, EntityUid};
+    use cedar_oci::EntityUid;
 
     use crate::policy::StaticPolicy;
     use crate::principal::PrincipalIdentity;
     use crate::session::{PolicyExtension, PolicySessionExt, PrincipalExt};
+    use crate::types::Decision;
 
     /// Register a one-column in-memory table so a `SELECT` has something to plan.
     fn register_table(ctx: &SessionContext) {

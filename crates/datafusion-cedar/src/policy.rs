@@ -1,10 +1,9 @@
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 
-use cedar_oci::Decision;
-
 use crate::facts::EvalContext;
 use crate::principal::PrincipalIdentity;
+use crate::types::Decision;
 
 #[cfg(feature = "governance")]
 use datafusion::common::DFSchema;

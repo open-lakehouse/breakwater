@@ -180,10 +180,11 @@ mod tests {
     use datafusion::logical_expr::logical_plan::builder::table_scan;
     use datafusion::logical_expr::{col, lit};
 
-    use cedar_oci::{Decision, EntityUid};
+    use cedar_oci::EntityUid;
 
     use super::*;
     use crate::principal::PrincipalIdentity;
+    use crate::types::Decision;
 
     /// A test policy returning a fixed enforcement for any table.
     #[derive(Debug)]

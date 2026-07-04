@@ -24,6 +24,7 @@ mod policy;
 mod principal;
 mod rule;
 mod session;
+mod types;
 mod visitor;
 
 #[cfg(feature = "governance")]
@@ -46,6 +47,7 @@ pub use session::{
     PrincipalExt, PrincipalProvider, SessionConfigEvalContextProvider,
     SessionConfigPrincipalProvider, authorize_and_govern, instrument_session_state,
 };
+pub use types::{AttrValue, Decision};
 
 #[cfg(feature = "governance")]
 pub use fact_store::{FactStore, InMemoryFactStore};
@@ -56,9 +58,10 @@ pub use session::FactStoreExt;
 #[cfg(feature = "governance")]
 pub use translate::{CedarResidualTranslator, ResidualTranslator};
 
-// Re-export the cedar identity/decision types through this crate so consumers
-// have a single import surface (they originate in `cedar-oci`).
-pub use cedar_oci::{Decision, EntityId, EntityTypeName, EntityUid};
+// Re-export the cedar identity types through this crate so consumers building
+// Cedar-shaped principals have a single import surface (they originate in
+// `cedar-oci`). The neutral [`Decision`] now comes from `types`.
+pub use cedar_oci::{EntityId, EntityTypeName, EntityUid};
 
 // Cedar value/entity types the host needs to build principal/resource
 // attributes and the group-entity closure for identity enrichment.

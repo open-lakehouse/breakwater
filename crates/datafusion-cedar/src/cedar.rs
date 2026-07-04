@@ -9,12 +9,23 @@ use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::sql::TableReference;
 
-use cedar_oci::{Decision, OciPolicyProvider};
+use cedar_oci::OciPolicyProvider;
 
 use crate::facts::{EvalContext, TableFacts};
 use crate::policy::Policy;
 use crate::principal::PrincipalIdentity;
+use crate::types::Decision;
 use crate::visitor::{PlanRequest, authorize_plan, table_resource_uid};
+
+/// Map Cedar's native decision onto the neutral [`Decision`]. Cedar has exactly
+/// two variants; anything that is not an explicit `Allow` is treated as `Deny`
+/// (fail-closed).
+fn neutral_decision(decision: cedar_policy::Decision) -> Decision {
+    match decision {
+        cedar_policy::Decision::Allow => Decision::Allow,
+        cedar_policy::Decision::Deny => Decision::Deny,
+    }
+}
 
 /// Build the request-time `Table` resource entity carrying the catalog facts,
 /// so policies can resolve `resource.owner/readers/writers/tags/column_tags`.
@@ -155,7 +166,7 @@ where
                 .is_authorized(&request, &request_entities)
                 .await
             {
-                Ok(response) => response.decision(),
+                Ok(response) => neutral_decision(response.decision()),
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -309,7 +320,7 @@ where
             .is_authorized(&request, &principal_entities)
             .await
         {
-            Ok(response) => Ok(response.decision()),
+            Ok(response) => Ok(neutral_decision(response.decision())),
             Err(e) => {
                 tracing::warn!(error = %e, action, "tool authorization failed; denying (fail-closed)");
                 Ok(Decision::Deny)

@@ -24,13 +24,13 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::{QueryPlanner, SessionContext, SessionState};
 use datafusion::logical_expr::LogicalPlan;
 
-use cedar_oci::Decision;
 use datafusion_common::{Result, exec_err};
 
 use crate::facts::{CatalogFactSink, EvalContext};
 use crate::policy::{Policy, StaticPolicy};
 use crate::principal::PrincipalIdentity;
 use crate::rule::PolicyQueryPlanner;
+use crate::types::Decision;
 
 /// The `SessionConfig` extension carrying the per-request principal.
 ///
