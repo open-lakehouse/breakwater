@@ -101,16 +101,12 @@ impl Policy for StaticPolicy {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use datafusion::logical_expr::LogicalPlanBuilder;
-
-    use cedar_oci::EntityUid;
 
     use super::*;
 
     fn principal() -> PrincipalIdentity {
-        PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap())
+        PrincipalIdentity::new("User::\"alice\"")
     }
 
     #[tokio::test]

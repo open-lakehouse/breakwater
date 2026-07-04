@@ -1,59 +1,87 @@
 //! The authenticated principal a query runs as, and the identity PIP that
 //! enriches it with attributes + group membership from external systems.
+//!
+//! Everything here is **engine-neutral**: the principal is an opaque uid string,
+//! attributes are [`AttrValue`]s, and group membership is expressed as uid
+//! strings plus a neutral [`Group`] hierarchy. A policy-engine adapter (e.g.
+//! `cedar.rs`) lowers these to its own entity/value types at authorization time.
+//! No Cedar type appears in this module.
 
 use std::collections::HashMap;
 
-use cedar_policy::{Entity, RestrictedExpression};
-
-use cedar_oci::EntityUid;
+use crate::types::AttrValue;
 
 /// The principal on whose behalf a query executes, plus the attributes policies
 /// may condition on (e.g. `role`, `region`, `name`) and the group memberships
 /// they resolve `in` against.
 ///
-/// Carrying attributes alongside the `EntityUid` is why the [`Policy`](crate::Policy)
-/// trait threads a `&PrincipalIdentity` rather than a bare `EntityUid`: Cedar
-/// policies written against `principal.role` need the principal to exist as an
-/// entity with those attributes at authorization time. The host (hydrofoil)
-/// builds this from authenticated request metadata, then optionally enriches it
-/// via an [`IdentityProvider`] (see [`PrincipalIdentity::enriched`]).
+/// Carrying attributes alongside the uid is why the
+/// [`PolicyEngine`](crate::PolicyEngine) trait threads a `&PrincipalIdentity`
+/// rather than a bare uid string: attribute-based policies (`principal.role ==
+/// ...`) need the principal's attributes at authorization time. The host builds
+/// this from authenticated request metadata, then optionally enriches it via an
+/// [`IdentityProvider`] (see [`PrincipalIdentity::enriched`]).
 ///
-/// **Group membership.** `groups` are the principal's *direct* parents and
-/// `group_entities` the transitive closure of those groups (each with their own
-/// parents/attrs). Both come from the identity PIP and are folded into the
-/// request-time entities by [`to_entities`](PrincipalIdentity::to_entities), so
-/// `principal in UserGroup::"…"` resolves dynamically rather than from a static
-/// entity bundle. See `docs/adr/0008-principal-identity-resolution.md`.
+/// **Group membership.** `groups` are the principal's *direct* parents (uid
+/// strings). The transitive closure of those groups — each group's own parents —
+/// is carried on the [`PrincipalEnrichment`] as [`Group`]s, so an adapter can
+/// rebuild the hierarchy and `principal in Group::"…"` resolves dynamically
+/// rather than from a static entity bundle. The Cedar adapter folds both into
+/// request-time entities.
 #[derive(Debug, Clone)]
 pub struct PrincipalIdentity {
-    /// The principal's Cedar entity uid, e.g. `User::"alice"`.
-    pub uid: EntityUid,
-    /// Principal attributes, as Cedar restricted expressions.
-    pub attributes: HashMap<String, RestrictedExpression>,
-    /// The principal's direct group memberships → this entity's Cedar parents.
-    pub groups: Vec<EntityUid>,
-    /// The transitive group entities to fold alongside the principal so the
-    /// hierarchy resolves. Not part of the principal's identity per se; carried
-    /// here so a single value reaches `Entities::from_entities`.
-    group_entities: Vec<Entity>,
+    /// The principal's opaque uid, e.g. `User::"alice"`. Format is the engine's
+    /// concern; the core treats it as a string.
+    pub uid: String,
+    /// Principal attributes, as engine-neutral [`AttrValue`]s.
+    pub attributes: HashMap<String, AttrValue>,
+    /// The principal's direct group memberships, as uid strings.
+    pub groups: Vec<String>,
+    /// The transitive group hierarchy to resolve membership against. Not part of
+    /// the principal's identity per se; carried here so a single value reaches
+    /// the adapter that rebuilds the engine's entity graph.
+    pub(crate) group_hierarchy: Vec<Group>,
+}
+
+/// A node in the neutral group hierarchy: a group uid and its direct parent
+/// group uids. The transitive closure of a principal's groups (each group plus
+/// its ancestors) so `privileged_readers ⊂ readers` resolves without a static
+/// entity bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    /// The group's uid, e.g. `UserGroup::"readers"`.
+    pub uid: String,
+    /// The group's direct parent group uids.
+    pub parents: Vec<String>,
 }
 
 impl PrincipalIdentity {
     /// A principal with a uid and no attributes or groups.
-    pub fn new(uid: EntityUid) -> Self {
+    pub fn new(uid: impl Into<String>) -> Self {
         Self {
-            uid,
+            uid: uid.into(),
             attributes: HashMap::new(),
             groups: Vec::new(),
-            group_entities: Vec::new(),
+            group_hierarchy: Vec::new(),
         }
     }
 
     /// Set a string-valued attribute (e.g. `role`, `region`).
     pub fn with_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.attributes
-            .insert(key.into(), RestrictedExpression::new_string(value.into()));
+            .insert(key.into(), AttrValue::String(value.into()));
         self
+    }
+
+    /// Set an attribute of any [`AttrValue`] type (long, bool, set, …).
+    pub fn with_attribute_value(mut self, key: impl Into<String>, value: AttrValue) -> Self {
+        self.attributes.insert(key.into(), value);
+        self
+    }
+
+    /// The transitive group hierarchy carried for membership resolution.
+    pub(crate) fn group_hierarchy(&self) -> &[Group] {
+        &self.group_hierarchy
     }
 
     /// Apply a [`PrincipalEnrichment`] resolved from an [`IdentityProvider`].
@@ -61,50 +89,29 @@ impl PrincipalIdentity {
     /// IdP-sourced attributes **override** any client-asserted attribute of the
     /// same key (the IdP is authoritative; see the trust note on
     /// [`IdentityProvider`]). Groups become this principal's parents and the
-    /// group-entity closure is carried for folding.
+    /// group hierarchy is carried for the adapter to fold.
     pub fn enriched(mut self, enrichment: PrincipalEnrichment) -> Self {
         self.attributes.extend(enrichment.attributes);
         self.groups = enrichment.groups;
-        self.group_entities = enrichment.group_entities;
+        self.group_hierarchy = enrichment.group_hierarchy;
         self
-    }
-
-    /// Build the Cedar [`Entity`] for this principal so an authorizer can
-    /// resolve `principal.<attr>` references **and** `principal in <group>`
-    /// membership. The groups are emitted as the entity's parents. Returns the
-    /// bare uid entity (no attributes/parents) if attribute evaluation fails, so
-    /// authorization stays fail-closed rather than erroring open.
-    pub fn to_entity(&self) -> Entity {
-        let parents: std::collections::HashSet<EntityUid> = self.groups.iter().cloned().collect();
-        Entity::new(self.uid.clone(), self.attributes.clone(), parents)
-            .unwrap_or_else(|_| Entity::new_no_attrs(self.uid.clone(), Default::default()))
-    }
-
-    /// The principal entity **plus** the transitive group entities — the full
-    /// set to hand to `Entities::from_entities`. This is what makes group
-    /// membership resolve without a static entity bundle.
-    pub fn to_entities(&self) -> Vec<Entity> {
-        let mut entities = Vec::with_capacity(1 + self.group_entities.len());
-        entities.push(self.to_entity());
-        entities.extend(self.group_entities.iter().cloned());
-        entities
     }
 }
 
 /// The facts an [`IdentityProvider`] resolves for a principal: attributes to
-/// fold onto the principal entity, the principal's direct group parents, and the
-/// transitive group entities needed for Cedar's `in` to resolve the hierarchy.
+/// fold onto the principal, the principal's direct group parents, and the
+/// transitive group hierarchy needed for `in` to resolve the ancestry.
 #[derive(Debug, Clone, Default)]
 pub struct PrincipalEnrichment {
     /// IdP-sourced attributes (role, region, …). These override client-asserted
     /// attributes of the same key when applied via [`PrincipalIdentity::enriched`].
-    pub attributes: HashMap<String, RestrictedExpression>,
-    /// The principal's direct group memberships → Cedar entity parents.
-    pub groups: Vec<EntityUid>,
-    /// The transitive group entities (groups + their ancestors, each with their
-    /// own parents/attrs), so `privileged_readers ⊂ readers` resolves without
-    /// the static bundle.
-    pub group_entities: Vec<Entity>,
+    pub attributes: HashMap<String, AttrValue>,
+    /// The principal's direct group memberships, as uid strings.
+    pub groups: Vec<String>,
+    /// The transitive group hierarchy (groups + their ancestors, each with its
+    /// own parents), so `privileged_readers ⊂ readers` resolves without the
+    /// static bundle.
+    pub group_hierarchy: Vec<Group>,
 }
 
 /// Neutral, transport-free claims the host passes to an [`IdentityProvider`].
@@ -150,100 +157,86 @@ pub enum IdentityError {
 /// should be treated fail-closed by the host (fail the session). An unknown uid
 /// returning an *empty* enrichment is a success, not an error.
 ///
-/// The trait deals only in this crate's types so it can live here; concrete
-/// IdP/directory-querying implementations live in the host.
+/// The trait deals only in this crate's neutral types so it can live here;
+/// concrete IdP/directory-querying implementations live in the host.
 #[async_trait::async_trait]
 pub trait IdentityProvider: std::fmt::Debug + Send + Sync {
     async fn enrich(
         &self,
-        uid: &EntityUid,
+        uid: &str,
         claims: &PrincipalClaims,
     ) -> Result<PrincipalEnrichment, IdentityError>;
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use super::*;
 
-    fn uid(s: &str) -> EntityUid {
-        EntityUid::from_str(s).unwrap()
-    }
-
-    fn group(s: &str) -> EntityUid {
-        EntityUid::from_str(s).unwrap()
-    }
-
     #[test]
-    fn carries_attributes_and_builds_entity() {
-        let id = PrincipalIdentity::new(uid("User::\"alice\""))
+    fn carries_attributes() {
+        let id = PrincipalIdentity::new("User::\"alice\"")
             .with_attribute("role", "analyst")
             .with_attribute("region", "eu");
         assert_eq!(id.attributes.len(), 2);
-        // Entity construction succeeds and preserves the uid.
-        let entity = id.to_entity();
-        assert_eq!(entity.uid(), id.uid);
+        assert_eq!(id.uid, "User::\"alice\"");
+        assert_eq!(
+            id.attributes.get("role"),
+            Some(&AttrValue::String("analyst".into()))
+        );
     }
 
     #[test]
-    fn entity_with_no_attributes() {
-        let id = PrincipalIdentity::new(uid("User::\"bob\""));
+    fn with_attribute_value_carries_non_string() {
+        let id = PrincipalIdentity::new("User::\"alice\"")
+            .with_attribute_value("clearance", AttrValue::Long(3))
+            .with_attribute_value("admin", AttrValue::Bool(true));
+        assert_eq!(id.attributes.get("clearance"), Some(&AttrValue::Long(3)));
+        assert_eq!(id.attributes.get("admin"), Some(&AttrValue::Bool(true)));
+    }
+
+    #[test]
+    fn no_attributes_by_default() {
+        let id = PrincipalIdentity::new("User::\"bob\"");
         assert!(id.attributes.is_empty());
-        assert_eq!(id.to_entity().uid().to_string(), "User::\"bob\"");
+        assert!(id.groups.is_empty());
     }
 
     #[test]
-    fn to_entity_with_groups_builds_successfully() {
-        // The groups are emitted as the entity's parents (their effect on `in`
-        // is exercised end-to-end by the Cedar evaluation test in `cedar.rs`,
-        // `is_allowed_resolves_group_membership_with_empty_bundle`). Here we only
-        // assert construction succeeds with parents and preserves the uid.
-        let id = PrincipalIdentity::new(uid("User::\"alice\"")).enriched(PrincipalEnrichment {
-            groups: vec![group("UserGroup::\"readers\"")],
-            ..Default::default()
-        });
-        assert_eq!(id.to_entity().uid(), id.uid);
-    }
-
-    #[test]
-    fn to_entities_includes_group_closure() {
+    fn enriched_sets_groups_and_hierarchy() {
         // alice ∈ privileged_readers ⊂ readers — supplied entirely by enrichment.
-        let readers = Entity::new_no_attrs(group("UserGroup::\"readers\""), Default::default());
-        let privileged = Entity::new(
-            group("UserGroup::\"privileged_readers\""),
-            HashMap::new(),
-            [group("UserGroup::\"readers\"")].into_iter().collect(),
-        )
-        .unwrap();
-        let id = PrincipalIdentity::new(uid("User::\"alice\"")).enriched(PrincipalEnrichment {
-            groups: vec![group("UserGroup::\"privileged_readers\"")],
-            group_entities: vec![privileged, readers],
+        let id = PrincipalIdentity::new("User::\"alice\"").enriched(PrincipalEnrichment {
+            groups: vec!["UserGroup::\"privileged_readers\"".into()],
+            group_hierarchy: vec![
+                Group {
+                    uid: "UserGroup::\"privileged_readers\"".into(),
+                    parents: vec!["UserGroup::\"readers\"".into()],
+                },
+                Group {
+                    uid: "UserGroup::\"readers\"".into(),
+                    parents: vec![],
+                },
+            ],
             ..Default::default()
         });
-        // principal + 2 group entities.
-        assert_eq!(id.to_entities().len(), 3);
+        assert_eq!(id.groups, vec!["UserGroup::\"privileged_readers\""]);
+        assert_eq!(id.group_hierarchy().len(), 2);
     }
 
     #[test]
     fn enriched_idp_attributes_override_client_asserted() {
-        let id = PrincipalIdentity::new(uid("User::\"alice\""))
+        let id = PrincipalIdentity::new("User::\"alice\"")
             .with_attribute("role", "client-claimed") // self-asserted
             .enriched(PrincipalEnrichment {
                 attributes: HashMap::from([(
                     "role".to_string(),
-                    RestrictedExpression::new_string("idp-authoritative".to_string()),
+                    AttrValue::String("idp-authoritative".to_string()),
                 )]),
                 ..Default::default()
             });
         // IdP wins on key collision.
-        let role = id.attributes.get("role").unwrap();
         assert_eq!(
-            format!("{role:?}"),
-            format!(
-                "{:?}",
-                RestrictedExpression::new_string("idp-authoritative".to_string())
-            )
+            id.attributes.get("role"),
+            Some(&AttrValue::String("idp-authoritative".into()))
         );
     }
 }

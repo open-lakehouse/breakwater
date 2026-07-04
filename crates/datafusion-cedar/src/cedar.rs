@@ -11,6 +11,7 @@ use datafusion::sql::TableReference;
 
 use cedar_oci::OciPolicyProvider;
 
+use crate::cedar_entity::principal_entities;
 use crate::facts::{EvalContext, TableFacts};
 use crate::policy::Policy;
 use crate::principal::PrincipalIdentity;
@@ -149,7 +150,7 @@ where
             // table with gathered catalog facts — the `Table` resource entity
             // carrying `resource.owner/readers/writers/tags/column_tags`.
             // cedar-local-agent merges these with the entities the provider vends.
-            let mut entities = principal.to_entities();
+            let mut entities = principal_entities(principal)?;
             if let Some(table_ref) = &table
                 && let Some(facts) = eval.catalog_facts.get(table_ref)
                 && let Some(entity) = table_entity(table_ref, &facts)
@@ -210,13 +211,13 @@ where
         let context = crate::visitor::table_context(table, &[])?;
 
         let request = RequestBuilder::default()
-            .principal(principal.uid.clone())
+            .principal(crate::cedar_entity::parse_uid(&principal.uid)?)
             .action(read_action)
             .unknown_resource_with_type(table_type)
             .context(context)
             .build();
 
-        let principal_entities = Entities::from_entities(principal.to_entities(), None)
+        let principal_entities = Entities::from_entities(principal_entities(principal)?, None)
             .unwrap_or_else(|_| Entities::empty());
 
         let response = match self
@@ -308,10 +309,16 @@ where
             EntityId::new(action),
         );
         let context = crate::visitor::tool_context(observed_taints)?;
-        let request = Request::new(principal.uid.clone(), action_uid, resource, context, None)
-            .map_err(|e| plan_datafusion_err!("Failed to create tool request: {e}"))?;
+        let request = Request::new(
+            crate::cedar_entity::parse_uid(&principal.uid)?,
+            action_uid,
+            resource,
+            context,
+            None,
+        )
+        .map_err(|e| plan_datafusion_err!("Failed to create tool request: {e}"))?;
 
-        let principal_entities = Entities::from_entities(principal.to_entities(), None)
+        let principal_entities = Entities::from_entities(principal_entities(principal)?, None)
             .unwrap_or_else(|_| Entities::empty());
 
         // Fail closed: an authorizer error denies the tool call.
@@ -338,7 +345,7 @@ mod tests {
     use cedar_local_agent::public::{
         EntityProviderError, PolicySetProviderError, SimpleEntityProvider, SimplePolicySetProvider,
     };
-    use cedar_policy::{Entities, EntityUid, PolicySet, Request};
+    use cedar_policy::{Entities, PolicySet, Request};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::logical_plan::builder::table_scan;
 
@@ -411,8 +418,7 @@ mod tests {
     }
 
     fn alice() -> PrincipalIdentity {
-        PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap())
-            .with_attribute("region", "eu")
+        PrincipalIdentity::new("User::\"alice\"").with_attribute("region", "eu")
     }
 
     fn scan_plan() -> LogicalPlan {
@@ -542,10 +548,11 @@ mod tests {
 
     #[tokio::test]
     async fn is_allowed_resolves_group_membership_with_empty_bundle() {
-        use cedar_policy::Entity;
+        use crate::principal::Group;
         // The entity provider vends NO entities; alice's `readers` membership
         // exists only in the enrichment closure (alice ∈ privileged_readers ⊂
-        // readers), supplied request-time via `to_entities()`.
+        // readers), supplied request-time via the neutral group hierarchy that
+        // the adapter rebuilds into Cedar entities.
         let pol = policy(
             InMemory::new(
                 r#"permit(principal in UserGroup::"readers", action == Action::"read_table", resource);"#,
@@ -553,21 +560,18 @@ mod tests {
             InMemory::new(""),
         );
 
-        let readers = Entity::new_no_attrs(
-            EntityUid::from_str("UserGroup::\"readers\"").unwrap(),
-            Default::default(),
-        );
-        let privileged = Entity::new(
-            EntityUid::from_str("UserGroup::\"privileged_readers\"").unwrap(),
-            std::collections::HashMap::new(),
-            [EntityUid::from_str("UserGroup::\"readers\"").unwrap()]
-                .into_iter()
-                .collect(),
-        )
-        .unwrap();
         let enriched = alice().enriched(crate::PrincipalEnrichment {
-            groups: vec![EntityUid::from_str("UserGroup::\"privileged_readers\"").unwrap()],
-            group_entities: vec![privileged, readers],
+            groups: vec!["UserGroup::\"privileged_readers\"".into()],
+            group_hierarchy: vec![
+                Group {
+                    uid: "UserGroup::\"privileged_readers\"".into(),
+                    parents: vec!["UserGroup::\"readers\"".into()],
+                },
+                Group {
+                    uid: "UserGroup::\"readers\"".into(),
+                    parents: vec![],
+                },
+            ],
             ..Default::default()
         });
 
@@ -608,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn demo_policy_gate_denies_principal_without_region() {
         let pol = policy(InMemory::new(DEMO_POLICY), InMemory::new(""));
-        let carol = PrincipalIdentity::new(EntityUid::from_str("User::\"carol\"").unwrap());
+        let carol = PrincipalIdentity::new("User::\"carol\"");
         let decision = pol
             .is_allowed(&scan_plan(), &carol, &EvalContext::default())
             .await
@@ -849,8 +853,7 @@ mod tests {
         // so the demo can't silently rot. (`DEMO_POLICY` comes from `super`.)
 
         fn bob() -> PrincipalIdentity {
-            PrincipalIdentity::new(EntityUid::from_str("User::\"bob\"").unwrap())
-                .with_attribute("region", "us")
+            PrincipalIdentity::new("User::\"bob\"").with_attribute("region", "us")
         }
 
         #[tokio::test]

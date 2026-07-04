@@ -19,6 +19,7 @@
 //!   and column masks derived from Cedar partial-evaluation residuals.
 
 mod cedar;
+mod cedar_entity;
 mod facts;
 mod policy;
 mod principal;
@@ -35,10 +36,11 @@ pub mod govern;
 mod translate;
 
 pub use cedar::CedarPolicy;
+pub use cedar_entity::{parse_uid, principal_entities};
 pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
 pub use policy::{Policy, StaticPolicy};
 pub use principal::{
-    AgentClaims, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
+    AgentClaims, Group, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
     PrincipalIdentity,
 };
 pub use rule::PolicyQueryPlanner;

@@ -291,6 +291,9 @@ pub(crate) fn authorize_plan(
     let mut visitor = AuthorizationVisitor { actions: vec![] };
     plan.visit(&mut visitor)?;
 
+    // Parse the neutral principal uid once into a Cedar uid for every request.
+    let principal_uid = crate::cedar_entity::parse_uid(&principal.uid)?;
+
     let mut requests = vec![];
     for action in visitor.actions {
         let (action_uid, resource, context, table) = match action {
@@ -334,7 +337,7 @@ pub(crate) fn authorize_plan(
                 )
             }
         };
-        let request = Request::new(principal.uid.clone(), action_uid, resource, context, None)
+        let request = Request::new(principal_uid.clone(), action_uid, resource, context, None)
             .map_err(|e| plan_datafusion_err!("Failed to create request: {}", e))?;
         requests.push(PlanRequest { request, table });
     }
@@ -344,15 +347,13 @@ pub(crate) fn authorize_plan(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::logical_plan::builder::table_scan;
 
     use super::*;
 
     fn principal() -> PrincipalIdentity {
-        PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap())
+        PrincipalIdentity::new("User::\"alice\"")
     }
 
     fn schema() -> Schema {

@@ -99,13 +99,9 @@ impl QueryPlanner for PolicyQueryPlanner {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
-
-    use cedar_oci::EntityUid;
 
     use crate::policy::StaticPolicy;
     use crate::principal::PrincipalIdentity;
@@ -126,7 +122,7 @@ mod tests {
     fn instrumented_ctx(decision: Decision, bind_principal: bool) -> SessionContext {
         let mut state = SessionContext::new().state();
         if bind_principal {
-            let principal = PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap());
+            let principal = PrincipalIdentity::new("User::\"alice\"");
             state
                 .config_mut()
                 .set_extension(std::sync::Arc::new(PrincipalExt(principal)));

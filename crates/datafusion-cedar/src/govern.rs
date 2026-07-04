@@ -180,8 +180,6 @@ mod tests {
     use datafusion::logical_expr::logical_plan::builder::table_scan;
     use datafusion::logical_expr::{col, lit};
 
-    use cedar_oci::EntityUid;
-
     use super::*;
     use crate::principal::PrincipalIdentity;
     use crate::types::Decision;
@@ -212,8 +210,7 @@ mod tests {
     }
 
     fn principal() -> PrincipalIdentity {
-        use std::str::FromStr as _;
-        PrincipalIdentity::new(EntityUid::from_str("User::\"alice\"").unwrap())
+        PrincipalIdentity::new("User::\"alice\"")
     }
 
     fn scan() -> LogicalPlan {
