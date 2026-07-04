@@ -7,10 +7,10 @@
 //! - **Decide** — the [`PolicyEngine`] trait: the contract a policy engine
 //!   implements to answer *what is allowed* (coarse gate) and *what constraints
 //!   apply* (row filters + column masks). It names no engine type; a Cedar
-//!   adapter lives in [`datafusion-cedar`](https://docs.rs/datafusion-cedar),
+//!   adapter lives in [`datafusion-cedar`](https://docs.rs/olai-datafusion-cedar),
 //!   and an OPA or OpenFGA adapter could implement the same trait.
 //! - **Enforce** — the [`PolicyQueryPlanner`] (a `QueryPlanner` wrapper) and the
-//!   pre-optimize plan rewrite ([`govern_plan`], under `governance`) that apply
+//!   pre-optimize plan rewrite ([`govern_plan`], under `fgac`) that apply
 //!   the engine's answers to a session.
 //!
 //! Everything here is expressed in neutral types — [`Decision`], [`AttrValue`],
@@ -21,7 +21,7 @@
 //!
 //! - **Layer 1 — coarse access gate** ([`PolicyEngine::is_allowed`]): does the
 //!   principal have access to the tables/actions a query references?
-//! - **Layer 2 — fine-grained governance** (feature `governance`): row filters
+//! - **Layer 2 — fine-grained governance** (feature `fgac`): row filters
 //!   and column masks the engine derives, applied before optimization.
 //!
 //! [`Expr`]: datafusion::logical_expr::Expr
@@ -35,9 +35,9 @@ mod rule;
 mod session;
 mod types;
 
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 mod fact_store;
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub mod govern;
 
 pub use constraint::ConstraintTranslator;
@@ -56,9 +56,9 @@ pub use session::{
 };
 pub use types::{AttrValue, Decision};
 
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub use fact_store::{FactStore, InMemoryFactStore};
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub use govern::{TablePolicy, govern_plan};
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub use session::FactStoreExt;

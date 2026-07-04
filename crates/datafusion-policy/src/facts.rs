@@ -124,7 +124,7 @@ impl CatalogFactSink {
 ///
 /// This is the single seam carrying everything a Cedar evaluation needs beyond
 /// the plan and principal: the catalog facts gathered this query, the
-/// correlation id that keys session-scoped state, and (with `governance`) the
+/// correlation id that keys session-scoped state, and (with `fgac`) the
 /// session fact store the governance PEP records taints into. Keeping it in one
 /// struct means future fact sources grow here rather than in the trait
 /// signature.
@@ -137,9 +137,9 @@ pub struct EvalContext {
     pub correlation_id: Option<String>,
     /// The session fact store taints are recorded into (at the governance PEP)
     /// and read back from (at a later PEP). `None` when no store is wired —
-    /// taint recording then no-ops. Behind `governance`, alongside the PEP that
+    /// taint recording then no-ops. Behind `fgac`, alongside the PEP that
     /// consumes it.
-    #[cfg(feature = "governance")]
+    #[cfg(feature = "fgac")]
     pub fact_store: Option<Arc<dyn crate::FactStore>>,
 }
 
@@ -148,7 +148,7 @@ impl std::fmt::Debug for EvalContext {
         let mut s = f.debug_struct("EvalContext");
         s.field("catalog_facts", &self.catalog_facts)
             .field("correlation_id", &self.correlation_id);
-        #[cfg(feature = "governance")]
+        #[cfg(feature = "fgac")]
         s.field("fact_store", &self.fact_store.is_some());
         s.finish()
     }

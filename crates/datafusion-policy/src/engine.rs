@@ -5,9 +5,9 @@ use crate::facts::EvalContext;
 use crate::principal::PrincipalIdentity;
 use crate::types::Decision;
 
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 use datafusion::common::DFSchema;
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 use datafusion::sql::TableReference;
 
 /// The **decide** contract every policy engine implements — the engine-agnostic
@@ -25,7 +25,7 @@ use datafusion::sql::TableReference;
 /// Layer 1 is the coarse allow/deny of [`is_allowed`](PolicyEngine::is_allowed)
 /// over the tables/actions a query references; the principal is passed as a
 /// [`PrincipalIdentity`] (uid + attributes) so attribute-based policies
-/// (`principal.role == ...`) can be evaluated. With the `governance` feature the
+/// (`principal.role == ...`) can be evaluated. With the `fgac` feature the
 /// trait also exposes [`constrain`](PolicyEngine::constrain) (Layer 2) and
 /// [`tool_policy`](PolicyEngine::tool_policy) (the agent-tool PEP).
 #[async_trait::async_trait]
@@ -34,7 +34,7 @@ pub trait PolicyEngine: std::fmt::Debug + Send + Sync {
     ///
     /// `eval` carries the per-query facts gathered outside the plan — the
     /// catalog facts to fold into `resource` entities, the correlation id, and
-    /// (with `governance`) the session fact store. Pass
+    /// (with `fgac`) the session fact store. Pass
     /// [`EvalContext::default()`] when no such facts are available.
     async fn is_allowed(
         &self,
@@ -52,7 +52,7 @@ pub trait PolicyEngine: std::fmt::Debug + Send + Sync {
     /// OpenFGA `ListObjects` id set (as a `col(id).in_list(...)` row filter) all
     /// land here. Default: no constraints. The Cedar implementation derives
     /// filters and masks from policy residuals; see `crate::govern`.
-    #[cfg(feature = "governance")]
+    #[cfg(feature = "fgac")]
     async fn constrain(
         &self,
         _table: &TableReference,
@@ -72,7 +72,7 @@ pub trait PolicyEngine: std::fmt::Debug + Send + Sync {
     /// injection because it constrains the action, not the prompt. `observed_taints`
     /// is read from the session fact store by correlation id (the host wires this
     /// at the tool-call boundary). Default: `Allow` (no guardrail).
-    #[cfg(feature = "governance")]
+    #[cfg(feature = "fgac")]
     async fn tool_policy(
         &self,
         _action: &str,

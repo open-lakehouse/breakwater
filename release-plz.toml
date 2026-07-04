@@ -7,8 +7,22 @@
 # topological order. PR titles are gated by .github/workflows/pr-title.yml; see
 # CONTRIBUTING.md for the end-to-end flow.
 #
-# Both crates are libraries published to crates.io. release-plz publishes in
-# dependency order: cedar-oci first, then datafusion-cedar (which depends on it).
+# All three crates are libraries published to crates.io. release-plz publishes
+# in dependency order: olai-datafusion-policy (neutral core) and olai-cedar-oci
+# first, then olai-datafusion-cedar (which depends on both).
+#
+# PUBLISHED NAMES vs. FOLDER NAMES: while we incubate ahead of community
+# consensus, the *published* artifacts carry an `olai-` prefix (open lakehouse
+# and ai) — the `[package].name` in each Cargo.toml. The on-disk folders keep
+# the short names (crates/cedar-oci, …). This matters here because:
+#   * `[[package]] name` below and `{{ package }}` in tag/release templates key
+#     off the *package* name, so they use the `olai-` names.
+#   * Per-crate CHANGELOG.md still lands in the crate's *folder* (release-plz
+#     keys the changelog path off the Cargo.toml directory, not the package
+#     name), so no `changelog_path` override is needed — changelogs stay at
+#     crates/<short-name>/CHANGELOG.md.
+#   * Commit scopes (feat(cedar-oci): …) still use the short names, so the
+#     changelog scope-stripping preprocessor below is unchanged.
 #
 # FIRST-PUBLISH BOOTSTRAP: crates.io OIDC trusted publishing (what the release
 # job uses) cannot create a crate name that has never existed. Each crate below
@@ -16,7 +30,7 @@
 # with a token (see .github/workflows/bootstrap-publish.yml) and its Trusted
 # Publisher is registered on crates.io. Drop the `release = false` for a crate
 # the moment its OIDC publisher is live; delete the bootstrap workflow + revoke
-# the token once both crates are on OIDC.
+# the token once all three crates are on OIDC.
 #
 # Config reference: https://release-plz.dev/docs/config
 
@@ -32,7 +46,8 @@ semver_check = true            # run cargo-semver-checks before bumping, to catc
                                # accidental breaking changes in published crates
 
 # --- Git tags & GitHub releases (per-crate) ---
-# Per-crate tags, e.g. `cedar-oci-v0.0.1` / `datafusion-cedar-v0.0.1`.
+# Per-crate tags off the published name, e.g. `olai-cedar-oci-v0.0.1` /
+# `olai-datafusion-cedar-v0.0.1` / `olai-datafusion-policy-v0.0.1`.
 git_tag_enable = true
 git_tag_name = "{{ package }}-v{{ version }}"
 git_release_enable = true
@@ -57,11 +72,15 @@ pr_draft = false
 # versions/changelogs/tags the crate; it just doesn't `cargo publish` it.
 # ---------------------------------------------------------------------------
 [[package]]
-name = "cedar-oci"
+name = "olai-datafusion-policy"
 release = false
 
 [[package]]
-name = "datafusion-cedar"
+name = "olai-cedar-oci"
+release = false
+
+[[package]]
+name = "olai-datafusion-cedar"
 release = false
 
 # ---------------------------------------------------------------------------
@@ -88,5 +107,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's changelog
 # is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((cedar-oci|oci|datafusion-cedar|cedar|policy)\)', replace = "" },
+  { pattern = '\((datafusion-policy|datafusion-cedar|cedar-oci|oci|cedar|policy)\)', replace = "" },
 ]

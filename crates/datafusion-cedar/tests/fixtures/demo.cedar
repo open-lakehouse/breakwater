@@ -9,13 +9,13 @@
 //     no region (e.g. the default `User::"anonymous"`) is denied the table
 //     outright — the whole query is rejected before execution.
 //
-//   Layer 2 — fine-grained governance (`Policy::table_policy`, `governance`
+//   Layer 2 — fine-grained governance (`Policy::table_policy`, `fgac`
 //   feature):
 //     - a row filter so each principal sees only rows in their own region
 //       (`resource.region == principal.region`), and
 //     - a column mask hiding `ssn` on this table.
 //
-// Run the server with the `governance` feature to see Layer 2; without it the
+// Run the server with the `fgac` feature to see Layer 2; without it the
 // gate (Layer 1) still applies. See docs/policy-enforcement-design.md.
 //
 // Note on column masks: the engine derives masks from Cedar partial-evaluation

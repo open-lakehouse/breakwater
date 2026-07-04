@@ -20,7 +20,7 @@ cargo test  --workspace --all-features
 ```
 
 `datafusion-cedar`'s fine-grained governance (row filters + column masks) is
-behind the `governance` feature; `--all-features` exercises it.
+behind the `fgac` feature; `--all-features` exercises it.
 
 ## Before you push
 

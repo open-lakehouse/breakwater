@@ -63,7 +63,7 @@ fn unity_ddl_context(name: &str) -> Result<Context> {
 /// send_external when context.observed_taints.contains("pii")`). This is the
 /// data-flow control that survives prompt injection — it blocks the *action*,
 /// not the prompt.
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub(crate) fn tool_context(
     observed_taints: &std::collections::BTreeSet<String>,
 ) -> Result<Context> {

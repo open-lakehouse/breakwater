@@ -9,7 +9,7 @@
 //! authorization requests, and reads Cedar partial-eval residuals into
 //! DataFusion predicates ([`CedarResidualTranslator`]). Policy *sourcing*
 //! (pulling a policy set / schema / entities from an OCI registry) lives in the
-//! [`cedar-oci`](https://docs.rs/cedar-oci) crate; engine-specific *glue*
+//! [`cedar-oci`](https://docs.rs/olai-cedar-oci) crate; engine-specific *glue*
 //! (extracting the principal from a request, composing onto a session) lives in
 //! the host — see [hydrofoil](https://github.com/open-lakehouse/hydrofoil) for a
 //! reference host.
@@ -24,7 +24,7 @@ mod cedar;
 mod cedar_entity;
 mod visitor;
 
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 mod translate;
 
 pub use cedar::CedarPolicyEngine;
@@ -40,9 +40,9 @@ pub use datafusion_policy::{
     TableFacts, authorize_and_govern, instrument_session_state, normalize, plan_actions,
 };
 
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub use datafusion_policy::{FactStore, FactStoreExt, InMemoryFactStore, TablePolicy, govern_plan};
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 pub use translate::CedarResidualTranslator;
 
 // Re-export the cedar identity types through this crate so consumers building

@@ -90,7 +90,7 @@ pub async fn govern_plan(
         // governance policy applies — taints accrue whenever a classified column
         // is read. Monotonic + idempotent, so repeated scans / re-planning are
         // safe. See docs/adr/0006 (shared-session-scoped facts).
-        #[cfg(feature = "governance")]
+        #[cfg(feature = "fgac")]
         record_taints(&table, schema.as_ref(), eval);
 
         if policies.contains_key(&table) {

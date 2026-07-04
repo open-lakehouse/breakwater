@@ -622,21 +622,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cedar-oci"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "cedar-local-agent",
- "cedar-policy",
- "oci-client",
- "prost",
- "tokio",
- "tonic",
- "tonic-prost",
- "tracing",
-]
-
-[[package]]
 name = "cedar-policy"
 version = "4.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1118,21 +1103,6 @@ dependencies = [
  "itertools",
  "log",
  "object_store",
-]
-
-[[package]]
-name = "datafusion-cedar"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "cedar-local-agent",
- "cedar-oci",
- "cedar-policy",
- "datafusion",
- "datafusion-policy",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1639,18 +1609,6 @@ dependencies = [
  "num-traits",
  "parking_lot",
  "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "datafusion-policy"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "dashmap",
- "datafusion",
- "datafusion-common",
- "thiserror",
  "tokio",
 ]
 
@@ -3042,6 +3000,48 @@ dependencies = [
  "strum",
  "strum_macros",
  "thiserror",
+]
+
+[[package]]
+name = "olai-cedar-oci"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "cedar-local-agent",
+ "cedar-policy",
+ "oci-client",
+ "prost",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tracing",
+]
+
+[[package]]
+name = "olai-datafusion-cedar"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "cedar-local-agent",
+ "cedar-policy",
+ "datafusion",
+ "olai-cedar-oci",
+ "olai-datafusion-policy",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "olai-datafusion-policy"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "datafusion",
+ "datafusion-common",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

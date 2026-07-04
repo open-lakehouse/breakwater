@@ -4,7 +4,8 @@ name: Release-plz
 # single "Release PR" containing per-crate version bumps + regenerated
 # changelogs. When that PR is merged, release-plz creates the per-crate git
 # tags + GitHub Releases and publishes to crates.io in dependency order
-# (cedar-oci before datafusion-cedar) over OIDC — no registry token.
+# (olai-datafusion-policy / olai-cedar-oci before olai-datafusion-cedar) over
+# OIDC — no registry token.
 #
 # A crate only publishes once its `release = false` gate is removed in
 # release-plz.toml (i.e. after its one-time bootstrap + Trusted Publisher
