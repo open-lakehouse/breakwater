@@ -18,20 +18,20 @@ OpenFGA adapter can plug in behind the same seam.
   `TableFacts`, DataFusion `Expr`s).
 - **Enforce** — the `PolicyQueryPlanner` (a `QueryPlanner` wrapper, the only
   async / `&SessionState`-bound seam around planning) and the pre-optimize plan
-  rewrite (`govern_plan`, under `governance`) that apply the engine's answers.
+  rewrite (`govern_plan`, under `fgac`) that apply the engine's answers.
 
 ## Two layers
 
 - **Layer 1 — coarse access gate** (`PolicyEngine::is_allowed`): does the
   principal have access to the tables/actions a query references?
-- **Layer 2 — fine-grained governance** (feature `governance`, off by default):
+- **Layer 2 — fine-grained governance** (feature `fgac`, off by default):
   row filters and column masks the engine derives, rewritten into the plan
   before optimization so they ride predicate/projection pushdown.
 
 ## Adapters
 
 An adapter crate implements `PolicyEngine` for a concrete engine. The reference
-adapter is [`datafusion-cedar`](https://docs.rs/datafusion-cedar) (Cedar). The
+adapter is [`datafusion-cedar`](https://docs.rs/olai-datafusion-cedar) (Cedar). The
 neutrality invariant — that this crate names no engine type — is enforced by a
 test (`tests/neutrality.rs`).
 

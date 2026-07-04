@@ -176,7 +176,7 @@ noting it is exactly the artifact a B-mode design would cache.
 
 ## The walkthrough (what the example proves)
 
-`cargo run -p datafusion-cedar --example fact_gathering_walkthrough --features
+`cargo run -p olai-datafusion-cedar --example fact_gathering_walkthrough --features
 governance` exercises **real** `is_authorized` / `is_authorized_partial` calls
 over the committed `config/policies/` model (plus two minimal inline policies),
 with facts supplied at each point:

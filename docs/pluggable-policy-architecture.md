@@ -31,13 +31,13 @@ pub trait PolicyEngine: Debug + Send + Sync {
     async fn is_allowed(&self, plan: &LogicalPlan, principal: &PrincipalIdentity,
                         eval: &EvalContext) -> Result<Decision>;
 
-    // Layer 2 (feature `governance`): the fine-grained constraints (row filters +
+    // Layer 2 (feature `fgac`): the fine-grained constraints (row filters +
     // column masks) that apply when `principal` reads `table`.
     async fn constrain(&self, table: &TableReference, schema: &DFSchema,
                        principal: &PrincipalIdentity, eval: &EvalContext)
         -> Result<TablePolicy>;
 
-    // Agent-tool PEP (feature `governance`): gate an action on the session's
+    // Agent-tool PEP (feature `fgac`): gate an action on the session's
     // accrued taints — a data-flow control that survives prompt injection.
     async fn tool_policy(&self, action: &str, principal: &PrincipalIdentity,
                          observed_taints: &BTreeSet<String>) -> Result<Decision>;

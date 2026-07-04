@@ -1,7 +1,7 @@
 # datafusion-cedar
 
 [Cedar](https://www.cedarpolicy.com/) adapter for the engine-neutral
-[`datafusion-policy`](https://docs.rs/datafusion-policy) layer — Cedar-backed
+[`datafusion-policy`](https://docs.rs/olai-datafusion-policy) layer — Cedar-backed
 policy enforcement for [Apache DataFusion](https://datafusion.apache.org/)
 sessions.
 
@@ -19,7 +19,7 @@ public surface is re-exported here so a Cedar host imports one crate.
   principal have access to the tables and actions a query references? The crate
   walks the `LogicalPlan` into a set of Cedar authorization requests and denies
   the query if any is not allowed.
-- **Layer 2 — fine-grained governance** (feature `governance`, off by default):
+- **Layer 2 — fine-grained governance** (feature `fgac`, off by default):
   row filters and column masks derived from Cedar partial-evaluation residuals,
   rewritten into the plan before it executes.
 
@@ -39,13 +39,13 @@ let ctx = SessionContext::new().with_policy(PolicyExtension::builder().policy(po
 Per-request context (the principal, catalog facts, the session fact store)
 flows through typed `SessionConfig` extensions, so the host stays unaware of the
 internals. Policy *sourcing* — pulling a policy set / schema / entities from an
-OCI registry — lives in the companion [`cedar-oci`](https://docs.rs/cedar-oci)
+OCI registry — lives in the companion [`cedar-oci`](https://docs.rs/olai-cedar-oci)
 crate.
 
 ## Example
 
 ```sh
-cargo run -p datafusion-cedar --example fact_gathering_walkthrough --features governance
+cargo run -p olai-datafusion-cedar --example fact_gathering_walkthrough --features fgac
 ```
 
 steps through the catalog → engine → agent decision points, supplies the facts
