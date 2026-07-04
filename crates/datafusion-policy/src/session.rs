@@ -26,8 +26,8 @@ use datafusion::logical_expr::LogicalPlan;
 
 use datafusion_common::{Result, exec_err};
 
+use crate::engine::{PolicyEngine, StaticPolicyEngine};
 use crate::facts::{CatalogFactSink, EvalContext};
-use crate::policy::{PolicyEngine, StaticPolicyEngine};
 use crate::principal::PrincipalIdentity;
 use crate::rule::PolicyQueryPlanner;
 use crate::types::Decision;

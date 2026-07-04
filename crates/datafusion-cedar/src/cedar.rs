@@ -11,11 +11,9 @@ use datafusion::sql::TableReference;
 
 use cedar_oci::OciPolicyProvider;
 
+use datafusion_policy::{Decision, EvalContext, PolicyEngine, PrincipalIdentity, TableFacts};
+
 use crate::cedar_entity::principal_entities;
-use crate::facts::{EvalContext, TableFacts};
-use crate::policy::PolicyEngine;
-use crate::principal::PrincipalIdentity;
-use crate::types::Decision;
 use crate::visitor::{PlanRequest, authorize_plan, table_resource_uid};
 
 /// Map Cedar's native decision onto the neutral [`Decision`]. Cedar has exactly
@@ -75,11 +73,11 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
 
 #[cfg(feature = "governance")]
 use {
-    crate::govern::TablePolicy,
-    crate::translate::{CedarResidualTranslator, ConstraintTranslator},
+    crate::translate::CedarResidualTranslator,
     cedar_policy::{EntityTypeName, Request, RequestBuilder},
     datafusion::common::DFSchema,
     datafusion::logical_expr::lit,
+    datafusion_policy::{ConstraintTranslator, TablePolicy},
     std::str::FromStr as _,
 };
 
@@ -88,7 +86,7 @@ use {
 /// Generic over any policy-set and entity provider (e.g. `cedar-oci`'s
 /// [`OciPolicyProvider`]), so the policy source is pluggable.
 #[derive(Debug)]
-pub struct CedarPolicy<P, E>
+pub struct CedarPolicyEngine<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -96,7 +94,7 @@ where
     authorizer: Authorizer<P, E>,
 }
 
-impl<P, E> CedarPolicy<P, E>
+impl<P, E> CedarPolicyEngine<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -106,7 +104,7 @@ where
     }
 }
 
-impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
+impl CedarPolicyEngine<OciPolicyProvider, OciPolicyProvider> {
     /// Build a Cedar policy that sources its policy set, schema, and entities
     /// from an OCI registry reference (e.g.
     /// `localhost:10100/hydrofoil/plan-policy:latest`).
@@ -130,7 +128,7 @@ impl CedarPolicy<OciPolicyProvider, OciPolicyProvider> {
 }
 
 #[async_trait::async_trait]
-impl<P, E> PolicyEngine for CedarPolicy<P, E>
+impl<P, E> PolicyEngine for CedarPolicyEngine<P, E>
 where
     P: SimplePolicySetProvider + 'static,
     E: SimpleEntityProvider + 'static,
@@ -350,7 +348,7 @@ mod tests {
     use datafusion::logical_expr::logical_plan::builder::table_scan;
 
     use super::*;
-    use crate::principal::PrincipalIdentity;
+    use datafusion_policy::PrincipalIdentity;
 
     /// In-memory provider holding a fixed policy set + entities, for tests.
     #[derive(Debug)]
@@ -404,7 +402,7 @@ mod tests {
         }
     }
 
-    fn policy<P, E>(p: P, e: E) -> CedarPolicy<P, E>
+    fn policy<P, E>(p: P, e: E) -> CedarPolicyEngine<P, E>
     where
         P: SimplePolicySetProvider + 'static,
         E: SimpleEntityProvider + 'static,
@@ -414,7 +412,7 @@ mod tests {
             .entity_provider(Arc::new(e))
             .build()
             .unwrap();
-        CedarPolicy::new(Authorizer::new(config))
+        CedarPolicyEngine::new(Authorizer::new(config))
     }
 
     fn alice() -> PrincipalIdentity {
@@ -479,8 +477,8 @@ mod tests {
 
     /// An `EvalContext` whose sink records `facts` for the bare table `t` that
     /// `scan_plan()` reads.
-    fn eval_with_table_facts(facts: crate::TableFacts) -> EvalContext {
-        let sink = crate::CatalogFactSink::new();
+    fn eval_with_table_facts(facts: datafusion_policy::TableFacts) -> EvalContext {
+        let sink = datafusion_policy::CatalogFactSink::new();
         sink.record(TableReference::bare("t"), facts);
         EvalContext {
             catalog_facts: sink,
@@ -501,7 +499,7 @@ mod tests {
             InMemory::new(""),
         );
 
-        let facts = crate::TableFacts {
+        let facts = datafusion_policy::TableFacts {
             tags: ["pii".to_string()].into_iter().collect(),
             ..Default::default()
         };
@@ -530,7 +528,7 @@ mod tests {
             ),
             InMemory::new(""),
         );
-        let facts = crate::TableFacts {
+        let facts = datafusion_policy::TableFacts {
             readers: ["User::\"alice\"".to_string()].into_iter().collect(),
             ..Default::default()
         };
@@ -548,7 +546,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_allowed_resolves_group_membership_with_empty_bundle() {
-        use crate::principal::Group;
+        use datafusion_policy::Group;
         // The entity provider vends NO entities; alice's `readers` membership
         // exists only in the enrichment closure (alice ∈ privileged_readers ⊂
         // readers), supplied request-time via the neutral group hierarchy that
@@ -560,7 +558,7 @@ mod tests {
             InMemory::new(""),
         );
 
-        let enriched = alice().enriched(crate::PrincipalEnrichment {
+        let enriched = alice().enriched(datafusion_policy::PrincipalEnrichment {
             groups: vec!["UserGroup::\"privileged_readers\"".into()],
             group_hierarchy: vec![
                 Group {

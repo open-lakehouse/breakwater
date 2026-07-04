@@ -1128,11 +1128,9 @@ dependencies = [
  "cedar-local-agent",
  "cedar-oci",
  "cedar-policy",
- "dashmap",
  "datafusion",
- "datafusion-common",
+ "datafusion-policy",
  "serde_json",
- "thiserror",
  "tokio",
  "tracing",
 ]
@@ -1642,6 +1640,19 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "datafusion-policy"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "datafusion",
+ "datafusion-common",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

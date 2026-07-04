@@ -20,23 +20,21 @@ use serde_json::Value;
 
 use cedar_policy::Policy;
 
-/// Translates a Cedar residual policy into a DataFusion predicate.
-///
-/// A seam: the default [`CedarResidualTranslator`] reads Cedar EST JSON, but a
-/// future `CelTranslator` (consuming Policast-style CEL manifests) could
-/// implement the same trait without touching the enforcement layer.
-pub trait ConstraintTranslator: std::fmt::Debug + Send + Sync {
-    /// Translate the residual's condition into a row-filter predicate
-    /// (`resource.<attr>` mapped to `col(<attr>)`). `None` means the residual
-    /// is trivially true (no filter needed).
-    fn to_predicate(&self, residual: &Policy) -> Result<Option<Expr>>;
-}
+use datafusion_policy::ConstraintTranslator;
 
-/// Reads the Cedar residual's EST JSON and lowers its condition to an [`Expr`].
+/// Reads a Cedar residual's EST JSON and lowers its condition to an [`Expr`].
+///
+/// The Cedar implementation of the neutral
+/// [`ConstraintTranslator`](datafusion_policy::ConstraintTranslator) seam: its
+/// `Residual` is a `cedar_policy::Policy`. A future `CelTranslator` (consuming
+/// Policast-style CEL manifests) would implement the same trait with a different
+/// `Residual` type, without touching the enforcement layer.
 #[derive(Debug, Default)]
 pub struct CedarResidualTranslator;
 
 impl ConstraintTranslator for CedarResidualTranslator {
+    type Residual = Policy;
+
     fn to_predicate(&self, residual: &Policy) -> Result<Option<Expr>> {
         let json = residual
             .to_json()

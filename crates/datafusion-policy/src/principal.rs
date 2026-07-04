@@ -80,7 +80,10 @@ impl PrincipalIdentity {
     }
 
     /// The transitive group hierarchy carried for membership resolution.
-    pub(crate) fn group_hierarchy(&self) -> &[Group] {
+    ///
+    /// Public so an engine adapter can rebuild the group ancestry when it lowers
+    /// the neutral principal to its own entity graph.
+    pub fn group_hierarchy(&self) -> &[Group] {
         &self.group_hierarchy
     }
 

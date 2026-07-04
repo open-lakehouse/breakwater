@@ -14,8 +14,7 @@ use cedar_policy::{Entity, EntityUid, RestrictedExpression};
 use datafusion::common::plan_datafusion_err;
 use datafusion::error::Result;
 
-use crate::principal::{Group, PrincipalIdentity};
-use crate::types::AttrValue;
+use datafusion_policy::{AttrValue, Group, PrincipalIdentity};
 
 /// Parse a neutral uid string (e.g. `User::"alice"`) into a Cedar [`EntityUid`].
 ///
@@ -82,7 +81,7 @@ fn group_entity(group: &Group) -> Result<Entity> {
 ///
 /// Exposed so hosts building Cedar requests directly (e.g. a write-path PEP) can
 /// fold the neutral principal into the request-time entity set the same way the
-/// [`CedarPolicy`](crate::CedarPolicy) adapter does.
+/// [`CedarPolicyEngine`](crate::CedarPolicyEngine) adapter does.
 pub fn principal_entities(principal: &PrincipalIdentity) -> Result<Vec<Entity>> {
     let mut entities = Vec::with_capacity(1 + principal.group_hierarchy().len());
     entities.push(principal_entity(principal)?);
@@ -97,7 +96,7 @@ pub fn principal_entities(principal: &PrincipalIdentity) -> Result<Vec<Entity>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::PrincipalEnrichment;
+    use datafusion_policy::PrincipalEnrichment;
 
     #[test]
     fn builds_principal_entity_with_attributes() {

@@ -17,8 +17,8 @@ use datafusion::common::{Column, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
+use crate::engine::PolicyEngine;
 use crate::facts::EvalContext;
-use crate::policy::PolicyEngine;
 use crate::principal::PrincipalIdentity;
 
 /// The fine-grained enforcement that applies to one table for one principal.

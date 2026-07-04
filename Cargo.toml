@@ -12,6 +12,7 @@ rust-version = "1.91"
 # (version) while local builds resolve against the path.
 cedar-oci = { version = "0.0.1", path = "crates/cedar-oci" }
 datafusion-cedar = { version = "0.0.1", path = "crates/datafusion-cedar" }
+datafusion-policy = { version = "0.0.1", path = "crates/datafusion-policy" }
 
 async-trait = { version = "^0.1.89" }
 cedar-local-agent = "3.0.0"

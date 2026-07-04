@@ -15,7 +15,7 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use datafusion_common::{Result, exec_err};
 
-use crate::policy::PolicyEngine;
+use crate::engine::PolicyEngine;
 use crate::session::{EvalContextProvider, PrincipalProvider, authorize_and_govern};
 
 /// A [`QueryPlanner`] that governs and gates a query before physical planning.
@@ -103,7 +103,7 @@ mod tests {
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
 
-    use crate::policy::StaticPolicyEngine;
+    use crate::engine::StaticPolicyEngine;
     use crate::principal::PrincipalIdentity;
     use crate::session::{PolicyExtension, PolicySessionExt, PrincipalExt};
     use crate::types::Decision;
