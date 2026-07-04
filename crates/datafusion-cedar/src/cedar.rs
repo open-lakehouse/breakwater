@@ -73,7 +73,7 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
 
 #[cfg(feature = "fgac")]
 use {
-    crate::cedar_entity::parse_uid,
+    crate::cedar_entity::{parse_uid, to_restricted_expr},
     crate::translate::CedarResidualTranslator,
     cedar_policy::{
         Context, EntityTypeName, PartialEntities, PartialEntity, PartialEntityUid, PartialRequest,
@@ -237,6 +237,14 @@ where
         // ---- Row filters: read_table over an unknown Table -----------------
         // A surviving *permit* residual over `resource.<col>` is a row filter; a
         // surviving *forbid* at table grain denies all rows.
+        //
+        // Cedar permit semantics are a *union*: any surviving permit residual is
+        // an alternative grant, so the residuals are OR-combined into one row
+        // filter. (Enforcement AND-s the elements of `row_filters`, so multiple
+        // alternative grants must be pre-combined here into a single element —
+        // pushing each separately would AND them and hide rows any one grant
+        // authorizes.) A permit residual that does not fold to a per-row predicate
+        // fails closed by denying all rows.
         match self.table_residuals(&policy_set, cedar_schema, table, principal, facts.as_ref()) {
             Ok((permits, forbids)) => {
                 if !forbids.is_empty() {
@@ -244,20 +252,29 @@ where
                     return Ok(deny_all_rows());
                 }
                 let translator = CedarResidualTranslator;
+                let mut row_filter: Option<Expr> = None;
                 for residual in permits {
                     match translator.to_predicate(&residual) {
-                        Ok(Some(pred)) => tp.row_filters.push(pred),
+                        Ok(Some(pred)) => {
+                            row_filter = Some(match row_filter {
+                                Some(acc) => acc.or(pred),
+                                None => pred,
+                            });
+                        }
                         Ok(None) => {}
                         Err(e) => {
                             tracing::warn!(error = %e, table = %table, "untranslatable row-filter residual; denying all rows (fail-closed)");
-                            tp.row_filters.push(lit(false));
+                            return Ok(deny_all_rows());
                         }
                     }
+                }
+                if let Some(pred) = row_filter {
+                    tp.row_filters.push(pred);
                 }
             }
             Err(e) => {
                 tracing::warn!(error = %e, table = %table, "row-filter TPE failed; denying all rows (fail-closed)");
-                tp.row_filters.push(lit(false));
+                return Ok(deny_all_rows());
             }
         }
 
@@ -434,10 +451,53 @@ where
         let attrs: BTreeMap<SmolStr, cedar_policy::RestrictedExpression> = principal
             .attributes
             .iter()
-            .map(|(k, v)| (SmolStr::from(k.as_str()), attr_to_restricted(v)))
+            .map(|(k, v)| (SmolStr::from(k.as_str()), to_restricted_expr(v)))
             .collect();
-        PartialEntity::new(uid, Some(attrs), Some(Default::default()), None, schema)
+        // Group membership (the principal's direct groups) is emitted as the
+        // entity's ancestors, mirroring `cedar_entity::principal_entity` — so a
+        // TPE governance policy gated on `principal in <group>` resolves the same
+        // way the coarse `is_allowed` gate does. Unparseable group uids are
+        // dropped (fail-closed: a membership that cannot be expressed does not
+        // resolve).
+        let ancestors: std::collections::HashSet<cedar_oci::EntityUid> = principal
+            .groups
+            .iter()
+            .filter_map(|g| parse_uid(g).ok())
+            .collect();
+        PartialEntity::new(uid, Some(attrs), Some(ancestors), None, schema)
             .map_err(|e| plan_datafusion_err!("failed to build principal partial entity: {e}"))
+    }
+
+    /// The principal partial entity **plus** the transitive group entities
+    /// rebuilt from the neutral hierarchy — the full principal-side entity set to
+    /// feed TPE. Mirrors `cedar_entity::principal_entities` so nested membership
+    /// (`privileged_readers ⊂ readers`) resolves under partial evaluation exactly
+    /// as it does on the coarse `is_allowed` path. Groups carry no attributes;
+    /// only their ancestry matters for `in` resolution. Unparseable group uids are
+    /// skipped (fail-closed) rather than failing the whole build.
+    fn principal_partial_entities(
+        &self,
+        principal: &PrincipalIdentity,
+        schema: &Schema,
+    ) -> Result<Vec<PartialEntity>> {
+        let mut entities = vec![self.principal_partial_entity(principal, schema)?];
+        for group in principal.group_hierarchy() {
+            let Ok(uid) = parse_uid(&group.uid) else {
+                continue;
+            };
+            let parents: std::collections::HashSet<cedar_oci::EntityUid> = group
+                .parents
+                .iter()
+                .filter_map(|p| parse_uid(p).ok())
+                .collect();
+            let entity =
+                PartialEntity::new(uid, Some(Default::default()), Some(parents), None, schema)
+                    .map_err(|e| {
+                        plan_datafusion_err!("failed to build group partial entity: {e}")
+                    })?;
+            entities.push(entity);
+        }
+        Ok(entities)
     }
 
     /// Run TPE for a `read_table` request over an *unknown* `Table` resource and
@@ -458,6 +518,17 @@ where
         let principal_uid = PartialEntityUid::from_concrete(parse_uid(&principal.uid)?);
         let table_type = EntityTypeName::from_str("Table")
             .map_err(|e| plan_datafusion_err!("invalid entity type name 'Table': {e}"))?;
+        // The Table resource is left *unknown* so per-row `resource.<col>`
+        // comparisons survive as row-filter residuals.
+        //
+        // NOTE: table-level governed tags (`TableFacts.governed_tags`) are NOT yet
+        // folded here — an unknown resource has no uid to key a tags-bearing
+        // entity onto, so a `read_table` row filter conditioned on
+        // `resource.hasTag`/`getTag` cannot fold today and fails closed. Folding
+        // table tags needs a request shape that keeps attributes symbolic while
+        // making tags concrete; wiring that is future work (see
+        // `docs/typed-fgac-seams.md`). The column-mask path already folds native
+        // tags because its resource uid is concrete.
         let resource_uid = PartialEntityUid::new(table_type, None);
         let context = crate::visitor::table_context(table, &[])?;
 
@@ -465,7 +536,7 @@ where
             PartialRequest::new(principal_uid, action, resource_uid, Some(context), schema)
                 .map_err(|e| plan_datafusion_err!("failed to build partial request: {e}"))?;
         let entities = PartialEntities::from_partial_entities(
-            [self.principal_partial_entity(principal, schema)?],
+            self.principal_partial_entities(principal, schema)?,
             schema,
         )
         .map_err(|e| plan_datafusion_err!("failed to build partial entities: {e}"))?;
@@ -539,6 +610,13 @@ where
         // Test each read_column forbid policy alone, paired with a blanket permit
         // so the decision reflects *only whether that forbid fires* (a forbid-only
         // set is default-deny regardless). The forbid that fires masks the column.
+        //
+        // When a column matches more than one forbid (e.g. tagged both `pii=ssn`
+        // and `classification=secret`), the first firing forbid in policy-set
+        // iteration order wins and supplies the mask function. `PolicySet` iterates
+        // in insertion (policy-source) order, so the choice is deterministic but
+        // declaration-ordered — there is no most-restrictive precedence. Order the
+        // policy source accordingly when a column can carry overlapping tags.
         let blanket_permit = cedar_policy::Policy::from_str(
             r#"permit(principal, action == Action::"read_column", resource);"#,
         )
@@ -561,14 +639,12 @@ where
                 schema,
             )
             .map_err(|e| plan_datafusion_err!("failed to build column partial request: {e}"))?;
-            let entities = PartialEntities::from_partial_entities(
-                [
-                    self.principal_partial_entity(principal, schema)?,
-                    column_entity.clone(),
-                ],
-                schema,
-            )
-            .map_err(|e| plan_datafusion_err!("failed to build column partial entities: {e}"))?;
+            let mut partial_entities = self.principal_partial_entities(principal, schema)?;
+            partial_entities.push(column_entity.clone());
+            let entities = PartialEntities::from_partial_entities(partial_entities, schema)
+                .map_err(|e| {
+                    plan_datafusion_err!("failed to build column partial entities: {e}")
+                })?;
 
             let response = probe
                 .tpe(&request, &entities, schema)
@@ -584,21 +660,36 @@ where
     /// Resolve the masking expression for a column using three-level resolution:
     /// (1) the policy's `@mask_fn`; (2) the matched `Tag`'s `default_mask_fn`;
     /// (3) the generated default literal.
+    ///
+    /// Level 2 is a not-yet-wired seam ([`tag_default_mask_fn`] currently returns
+    /// `None`), so a policy that names no `@mask_fn` today resolves to the level-3
+    /// default even when its matched `Tag` declares a `default_mask_fn`.
+    ///
+    /// [`tag_default_mask_fn`]: Self::tag_default_mask_fn
     async fn resolve_mask_expr(
         &self,
         mask_policy: &Policy,
         column: &str,
         eval: &EvalContext,
     ) -> Result<Expr> {
+        // Levels 1 & 2 both name a catalog function; they only apply when a
+        // resolver is wired. With no resolver, a named function has no way to be
+        // called, so resolution falls straight through to the level-3 default
+        // (the intended fail-closed fallback) rather than surfacing as an error —
+        // this keeps a genuine resolver error (below) distinguishable from the
+        // simply-not-configured case.
+        let Some(resolver) = eval.function_resolver.as_deref() else {
+            return Ok(lit(DEFAULT_MASK));
+        };
         // Level 1: a function named on the policy.
         if let Some(name) = mask_policy.annotation("mask_fn") {
-            return self.call_fn(name, column, mask_policy, eval).await;
+            return self.call_fn(resolver, name, column, mask_policy).await;
         }
         // Level 2: a default function on a matched Tag entity, resolved from the
         // provider's entity bundle. (The Tag whose key the policy matches carries
         // `default_mask_fn`.) We look it up via the schema-less entity provider.
         if let Some(name) = self.tag_default_mask_fn(mask_policy).await {
-            return self.call_fn(&name, column, mask_policy, eval).await;
+            return self.call_fn(resolver, &name, column, mask_policy).await;
         }
         // Level 3: generated default literal.
         Ok(lit(DEFAULT_MASK))
@@ -614,20 +705,20 @@ where
     }
 
     /// Build a `ScalarUDF` call over the masked column (arg 0) plus any
-    /// `@using_columns` extra args, resolving the function name via the eval
-    /// context's [`CatalogFunctionResolver`](datafusion_policy::CatalogFunctionResolver).
+    /// `@using_columns` extra args, resolving the function name via the supplied
+    /// [`CatalogFunctionResolver`](datafusion_policy::CatalogFunctionResolver).
+    ///
+    /// A resolver error (e.g. a transient catalog outage or an undeployed
+    /// function) propagates as `Err` — the caller fails closed by masking with the
+    /// default literal, distinct from the level-3 fallthrough when no resolver is
+    /// wired at all.
     async fn call_fn(
         &self,
+        resolver: &dyn datafusion_policy::CatalogFunctionResolver,
         name: &str,
         column: &str,
         mask_policy: &Policy,
-        eval: &EvalContext,
     ) -> Result<Expr> {
-        let resolver = eval.function_resolver.as_ref().ok_or_else(|| {
-            plan_datafusion_err!(
-                "policy names function '{name}' but no CatalogFunctionResolver is wired"
-            )
-        })?;
         let udf: Arc<ScalarUDF> = resolver.resolve(name).await?;
 
         let mut args: Vec<Expr> = vec![col(column)];
@@ -643,20 +734,6 @@ where
             }
         }
         Ok(udf.call(args))
-    }
-}
-
-/// Lower a neutral attribute value to a Cedar restricted expression (for the
-/// principal partial entity).
-#[cfg(feature = "fgac")]
-fn attr_to_restricted(v: &datafusion_policy::AttrValue) -> cedar_policy::RestrictedExpression {
-    use cedar_policy::RestrictedExpression as R;
-    use datafusion_policy::AttrValue;
-    match v {
-        AttrValue::String(s) => R::new_string(s.clone()),
-        AttrValue::Long(n) => R::new_long(*n),
-        AttrValue::Bool(b) => R::new_bool(*b),
-        AttrValue::Set(items) => R::new_set(items.iter().map(attr_to_restricted)),
     }
 }
 
@@ -1226,6 +1303,132 @@ mod tests {
                 .unwrap();
             assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
             assert!(tp.column_masks.is_empty());
+        }
+
+        #[tokio::test]
+        async fn multiple_permit_residuals_are_or_combined() {
+            // Two overlapping read_table permits are *alternative* grants (Cedar
+            // permit semantics = union). Their residuals must OR into one filter;
+            // AND-ing them would hide rows either grant authorizes. Here two
+            // region permits fold to `region == "eu" OR region == "us"`.
+            const POLICY: &str = r#"
+                permit (principal, action == Action::"read_table", resource)
+                when { resource.region == "eu" };
+                permit (principal, action == Action::"read_table", resource)
+                when { resource.region == "us" };
+            "#;
+            let engine = policy_with_schema(
+                InMemory::new(POLICY),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx(HashMap::new()),
+                )
+                .await
+                .unwrap();
+            // The two grants are OR-combined into a single filter (order follows
+            // policy-set iteration, so accept either arrangement).
+            assert_eq!(tp.row_filters.len(), 1);
+            let eu = col("region").eq(lit("eu"));
+            let us = col("region").eq(lit("us"));
+            let filter = &tp.row_filters[0];
+            assert!(
+                *filter == eu.clone().or(us.clone()) || *filter == us.or(eu),
+                "expected region==eu OR region==us, got {filter:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn resolver_error_fails_closed_to_default_mask() {
+            // A wired resolver that errors (e.g. transient catalog outage) must
+            // fail closed to the default mask, never expose the column.
+            #[derive(Debug)]
+            struct ErrResolver;
+            #[async_trait]
+            impl CatalogFunctionResolver for ErrResolver {
+                async fn resolve(&self, name: &str) -> Result<Arc<ScalarUDF>> {
+                    Err(plan_datafusion_err!(
+                        "catalog unreachable resolving '{name}'"
+                    ))
+                }
+            }
+            let tags = col_tags(&[("ssn", &[("pii", "ssn")])]);
+            let sink = CatalogFactSink::new();
+            sink.record(
+                table(),
+                TableFacts {
+                    governed_column_tags: tags,
+                    ..Default::default()
+                },
+            );
+            let eval = EvalContext {
+                catalog_facts: sink,
+                function_resolver: Some(Arc::new(ErrResolver)),
+                ..Default::default()
+            };
+            let tp = lakehouse_engine()
+                .constrain(&table(), &df_schema(), &alice_eu(), &eval)
+                .await
+                .unwrap();
+            assert_eq!(tp.column_masks.get("ssn"), Some(&lit(DEFAULT_MASK)));
+        }
+
+        #[tokio::test]
+        async fn group_membership_resolves_in_column_mask_tpe() {
+            use datafusion_policy::{Group, PrincipalEnrichment};
+
+            // A read_column forbid discharged only for members of a group. Under
+            // TPE the principal's group hierarchy must be threaded into the
+            // partial entities, or the `unless { principal in ... }` never fires
+            // and the mask is applied even to a member (fail-closed) — or, worse,
+            // membership silently never resolves. This pins the parents-in-TPE fix.
+            const POLICY: &str = r#"
+                permit (principal, action == Action::"read_table", resource)
+                when { principal has region };
+                forbid (principal, action == Action::"read_column", resource)
+                when { resource.hasTag("pii") && resource.getTag("pii") == "ssn" }
+                unless { principal in UserGroup::"unmasked_readers" };
+            "#;
+            let engine = policy_with_schema(
+                InMemory::new(POLICY),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tags = col_tags(&[("ssn", &[("pii", "ssn")])]);
+
+            // A member of `unmasked_readers` (via the enrichment closure) sees ssn
+            // unmasked — the membership discharges the forbid under TPE.
+            let member = alice_eu().enriched(PrincipalEnrichment {
+                groups: vec!["UserGroup::\"unmasked_readers\"".into()],
+                group_hierarchy: vec![Group {
+                    uid: "UserGroup::\"unmasked_readers\"".into(),
+                    parents: vec![],
+                }],
+                ..Default::default()
+            });
+            let tp = engine
+                .constrain(&table(), &df_schema(), &member, &eval_ctx(tags.clone()))
+                .await
+                .unwrap();
+            assert!(
+                !tp.column_masks.contains_key("ssn"),
+                "group member sees ssn unmasked"
+            );
+
+            // A non-member is masked — the forbid fires.
+            let tp = engine
+                .constrain(&table(), &df_schema(), &alice_eu(), &eval_ctx(tags))
+                .await
+                .unwrap();
+            assert!(
+                tp.column_masks.contains_key("ssn"),
+                "non-member has ssn masked"
+            );
         }
 
         #[tokio::test]
