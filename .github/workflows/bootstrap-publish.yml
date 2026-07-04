@@ -9,17 +9,19 @@ name: Bootstrap publish
 # name; after that, the maintainer registers the Trusted Publisher and OIDC
 # takes over for all subsequent releases.
 #
-# Publish in dependency order: `cedar-oci` first, then `datafusion-cedar`
-# (which depends on it — its dry-run only resolves once cedar-oci is on
-# crates.io). Run this workflow ONCE per new crate, then never again for it.
-# When both crates are on OIDC, DELETE this workflow and revoke the token.
-# See CONTRIBUTING.md ("crates.io authentication") for the full flow.
+# Publish in dependency order: `olai-datafusion-policy` and `olai-cedar-oci`
+# first, then `olai-datafusion-cedar` (which depends on them — its dry-run only
+# resolves once its deps are on crates.io). The `crate` input is a *package*
+# name (the `olai-` published name), passed straight to `cargo publish -p`. Run
+# this workflow ONCE per new crate, then never again for it. When all three are
+# on OIDC, DELETE this workflow and revoke the token. See CONTRIBUTING.md
+# ("crates.io authentication") for the full flow.
 
 on:
   workflow_dispatch:
     inputs:
       crate:
-        description: "Package name to bootstrap-publish (cedar-oci | datafusion-cedar)"
+        description: "Package name to bootstrap-publish (olai-datafusion-policy | olai-cedar-oci | olai-datafusion-cedar)"
         required: true
         type: string
       dry_run:
