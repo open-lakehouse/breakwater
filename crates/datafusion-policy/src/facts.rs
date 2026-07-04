@@ -5,7 +5,7 @@
 //! time — a table's `owner`/`readers`/`writers` and its column classification
 //! tags — that the Cedar layer folds into the `resource` entity at evaluation.
 //!
-//! The layering rule this module exists to enforce: `datafusion-cedar` must not
+//! The layering rule this module exists to enforce: `datafusion-policy-cedar` must not
 //! depend on `unitycatalog-*` (or any concrete catalog), so the host (hydrofoil)
 //! translates its catalog's `Table` into these neutral types and hands them
 //! across. Everything here is expressed in [`TableReference`], [`String`], and

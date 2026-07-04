@@ -5,7 +5,7 @@
 //! a future edit that reaches for a `cedar_policy` / `cedar_oci` /
 //! `cedar_local_agent` type inside the neutral core fails CI rather than
 //! silently re-coupling the seam. Engine-specific code belongs in an adapter
-//! crate (e.g. `datafusion-cedar`), never here.
+//! crate (e.g. `datafusion-policy-cedar`), never here.
 //!
 //! Doc comments legitimately *mention* Cedar as an example engine, so the check
 //! scans only non-doc-comment lines.

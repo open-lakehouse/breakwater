@@ -19,7 +19,7 @@ cargo build --workspace --all-features
 cargo test  --workspace --all-features
 ```
 
-`datafusion-cedar`'s fine-grained governance (row filters + column masks) is
+`datafusion-policy-cedar`'s fine-grained governance (row filters + column masks) is
 behind the `fgac` feature; `--all-features` exercises it.
 
 ## Before you push
@@ -77,9 +77,9 @@ machines — so the first publish runs from CI with a token:
    token (publish-new scope) as its `CARGO_REGISTRY_TOKEN` secret.
 2. Run the **Bootstrap publish** workflow
    (`.github/workflows/bootstrap-publish.yml`, `workflow_dispatch`) in
-   dependency order — `cedar-oci` first, then `datafusion-cedar`. Trigger it with
+   dependency order — `cedar-oci` first, then `datafusion-policy-cedar`. Trigger it with
    `dry_run` on first to confirm the package is publishable, then re-run with
-   `dry_run` off to create the crate. (`datafusion-cedar`'s dry-run only resolves
+   `dry_run` off to create the crate. (`datafusion-policy-cedar`'s dry-run only resolves
    once `cedar-oci` is live on crates.io.)
 3. On crates.io, register the Trusted Publisher for the new crate (repo
    `open-lakehouse/breakwater`, workflow `release-plz.yml`, environment

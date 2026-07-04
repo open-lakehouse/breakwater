@@ -137,5 +137,5 @@ Every ambiguity denies rather than exposes data:
 - Neutral seam: `datafusion-policy` — `CatalogFunctionResolver` (`function.rs`),
   `TablePolicy` (`govern.rs`), governed tags on `TableFacts` (`facts.rs`),
   `EvalContext.function_resolver` + `FunctionResolverExt` (`session.rs`).
-- Cedar adapter: `datafusion-cedar` — TPE `constrain` + three-level resolution
+- Cedar adapter: `datafusion-policy-cedar` — TPE `constrain` + three-level resolution
   (`cedar.rs`), the PST residual translator (`translate.rs`).

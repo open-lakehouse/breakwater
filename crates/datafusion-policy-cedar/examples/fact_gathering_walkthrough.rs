@@ -8,7 +8,7 @@
 //! evaluations — `is_authorized` for the coarse gates and `is_authorized_partial`
 //! for the engine's row-filter / column-mask governance.
 //!
-//! The shared-session-scoped facts use the **real** `olai_datafusion_cedar::InMemoryFactStore`
+//! The shared-session-scoped facts use the **real** `olai_datafusion_policy_cedar::InMemoryFactStore`
 //! (not a mock), and the principal's group membership is supplied via the real
 //! neutral `PrincipalEnrichment` / `Group` hierarchy the identity PIP produces
 //! (lowered to Cedar entities by `principal_entities`) — the static entity
@@ -22,7 +22,7 @@
 //!
 //! Run with:
 //! ```text
-//! cargo run -p olai-datafusion-cedar --example fact_gathering_walkthrough --features fgac
+//! cargo run -p olai-datafusion-policy-cedar --example fact_gathering_walkthrough --features fgac
 //! ```
 //!
 //! ## What it demonstrates
@@ -60,7 +60,7 @@ use cedar_policy::{
 use std::sync::Arc;
 
 use cedar_policy::Entity;
-use olai_datafusion_cedar::{
+use olai_datafusion_policy_cedar::{
     CedarResidualTranslator, ConstraintTranslator, Group, PrincipalEnrichment, PrincipalIdentity,
     parse_uid, principal_entities,
 };
@@ -140,11 +140,11 @@ permit (
 // columns) are resolved at the point of use and never persisted. Only
 // *shared-session-scoped* facts live here, keyed by correlation id, so a later
 // PEP (the agent tool-call) can read what earlier PEPs accrued. This is the
-// **real** `olai_datafusion_cedar::InMemoryFactStore` (not a mock); production would
+// **real** `olai_datafusion_policy_cedar::InMemoryFactStore` (not a mock); production would
 // swap a shared-KV backend behind the same `FactStore` trait (see the ADR).
 // ----------------------------------------------------------------------------
 
-use olai_datafusion_cedar::{FactStore as _, InMemoryFactStore};
+use olai_datafusion_policy_cedar::{FactStore as _, InMemoryFactStore};
 
 // ----------------------------------------------------------------------------
 // In-memory Cedar provider (mirrors the test harness in `cedar.rs`).

@@ -31,7 +31,7 @@ OpenFGA adapter can plug in behind the same seam.
 ## Adapters
 
 An adapter crate implements `PolicyEngine` for a concrete engine. The reference
-adapter is [`datafusion-cedar`](https://docs.rs/olai-datafusion-cedar) (Cedar). The
+adapter is [`datafusion-policy-cedar`](https://docs.rs/olai-datafusion-policy-cedar) (Cedar). The
 neutrality invariant — that this crate names no engine type — is enforced by a
 test (`tests/neutrality.rs`).
 

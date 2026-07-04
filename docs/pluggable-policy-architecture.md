@@ -9,11 +9,11 @@ crates:
 - **`datafusion-policy`** — the engine-agnostic core. It owns the decide contract
   and the enforcement machinery, expressed entirely in neutral types. It names no
   policy engine.
-- **`datafusion-cedar`** — a Cedar *adapter* behind that seam. It implements the
+- **`datafusion-policy-cedar`** — a Cedar *adapter* behind that seam. It implements the
   decide contract with [Cedar](https://www.cedarpolicy.com/) and does all
   Cedar-specific lowering.
 
-An OPA or OpenFGA adapter could sit alongside `datafusion-cedar` without touching
+An OPA or OpenFGA adapter could sit alongside `datafusion-policy-cedar` without touching
 the core. Proving that seam admits them — not building them — is the point of the
 split.
 
@@ -122,7 +122,7 @@ An adapter for OPA or OpenFGA would:
    fine-grained result to `TablePolicy`.
 2. Lower the neutral `PrincipalIdentity` (opaque uid string, `AttrValue`
    attributes, `Group` hierarchy) to its own request shape — the analog of
-   `datafusion-cedar`'s `cedar_entity` module.
+   `datafusion-policy-cedar`'s `cedar_entity` module.
 3. Optionally implement `ConstraintTranslator` for its residual type — the analog
    of `CedarResidualTranslator`.
 
@@ -132,7 +132,7 @@ engine type is named in the neutral core.
 
 ## What stays in the adapter
 
-`datafusion-cedar` holds everything Cedar-specific: `CedarPolicyEngine`, the
+`datafusion-policy-cedar` holds everything Cedar-specific: `CedarPolicyEngine`, the
 Cedar request-building that lowers `PlanAction`s to Cedar requests, the neutral
 principal → Cedar entity lowering (`cedar_entity`), the Cedar residual →
 `TablePolicy` mapping, and `CedarResidualTranslator`. It re-exports the neutral
