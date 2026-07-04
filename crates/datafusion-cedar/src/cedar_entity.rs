@@ -26,7 +26,7 @@ pub fn parse_uid(uid: &str) -> Result<EntityUid> {
 }
 
 /// Lower a neutral [`AttrValue`] to a Cedar [`RestrictedExpression`].
-fn to_restricted_expr(value: &AttrValue) -> RestrictedExpression {
+pub(crate) fn to_restricted_expr(value: &AttrValue) -> RestrictedExpression {
     match value {
         AttrValue::String(s) => RestrictedExpression::new_string(s.clone()),
         AttrValue::Long(n) => RestrictedExpression::new_long(*n),
