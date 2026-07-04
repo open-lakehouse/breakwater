@@ -9,7 +9,7 @@
 #
 # All three crates are libraries published to crates.io. release-plz publishes
 # in dependency order: olai-datafusion-policy (neutral core) and olai-cedar-oci
-# first, then olai-datafusion-cedar (which depends on both).
+# first, then olai-datafusion-policy-cedar (which depends on both).
 #
 # PUBLISHED NAMES vs. FOLDER NAMES: while we incubate ahead of community
 # consensus, the *published* artifacts carry an `olai-` prefix (open lakehouse
@@ -47,7 +47,7 @@ semver_check = true            # run cargo-semver-checks before bumping, to catc
 
 # --- Git tags & GitHub releases (per-crate) ---
 # Per-crate tags off the published name, e.g. `olai-cedar-oci-v0.0.1` /
-# `olai-datafusion-cedar-v0.0.1` / `olai-datafusion-policy-v0.0.1`.
+# `olai-datafusion-policy-cedar-v0.0.1` / `olai-datafusion-policy-v0.0.1`.
 git_tag_enable = true
 git_tag_name = "{{ package }}-v{{ version }}"
 git_release_enable = true
@@ -80,7 +80,7 @@ name = "olai-cedar-oci"
 release = false
 
 [[package]]
-name = "olai-datafusion-cedar"
+name = "olai-datafusion-policy-cedar"
 release = false
 
 # ---------------------------------------------------------------------------
@@ -107,5 +107,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's changelog
 # is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((datafusion-policy|datafusion-cedar|cedar-oci|oci|cedar|policy)\)', replace = "" },
+  { pattern = '\((datafusion-policy-cedar|datafusion-policy|cedar-oci|oci|cedar|policy)\)', replace = "" },
 ]

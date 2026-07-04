@@ -1,13 +1,13 @@
 [package]
-name = "olai-datafusion-cedar"
+name = "olai-datafusion-policy-cedar"
 version = "0.0.1"
 edition = { workspace = true }
 license = { workspace = true }
 rust-version = { workspace = true }
 description = "Cedar policy enforcement (access gate + row/column governance) for Apache DataFusion sessions"
 repository = "https://github.com/open-lakehouse/breakwater"
-homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/datafusion-cedar"
-documentation = "https://docs.rs/olai-datafusion-cedar"
+homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/datafusion-policy-cedar"
+documentation = "https://docs.rs/olai-datafusion-policy-cedar"
 readme = "README.md"
 keywords = ["datafusion", "cedar", "authorization", "governance"]
 categories = ["database", "authentication"]
@@ -36,7 +36,7 @@ fgac = [
     "dep:smol_str",
 ]
 # Back-compat alias: hydrofoil (and other dependents) opt into the Layer 2
-# machinery via `datafusion-cedar/governance`. The feature was renamed to `fgac`
+# machinery via `datafusion-policy-cedar/governance`. The feature was renamed to `fgac`
 # in the neutral-core split; this alias keeps dependents' feature maps working.
 governance = ["fgac"]
 

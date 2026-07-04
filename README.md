@@ -15,19 +15,19 @@ reusable pair — the reference host that composes them into a query session is
 While we incubate ahead of community consensus, the published crates.io names
 carry an `olai-` prefix (open lakehouse and ai). Add them under the short name so
 your `use` paths stay idiomatic, e.g.
-`datafusion-cedar = { package = "olai-datafusion-cedar", version = "0.0.1" }`.
+`datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.1" }`.
 
 | Crate | crates.io | Description |
 | --- | --- | --- |
-| [`datafusion-cedar`](crates/datafusion-cedar) | `olai-datafusion-cedar` | Cedar policy enforcement for DataFusion sessions: a coarse access gate plus optional row/column governance, attached to a `SessionState` as a query-planner extension. |
-| [`datafusion-policy`](crates/datafusion-policy) | `olai-datafusion-policy` | The engine-neutral policy core `datafusion-cedar` builds on: the decide contract, session seam, and (behind `fgac`) the row-filter/column-mask rewrite — engine-agnostic, no Cedar dependency. |
+| [`datafusion-policy-cedar`](crates/datafusion-policy-cedar) | `olai-datafusion-policy-cedar` | Cedar policy enforcement for DataFusion sessions: a coarse access gate plus optional row/column governance, attached to a `SessionState` as a query-planner extension. |
+| [`datafusion-policy`](crates/datafusion-policy) | `olai-datafusion-policy` | The engine-neutral policy core `datafusion-policy-cedar` builds on: the decide contract, session seam, and (behind `fgac`) the row-filter/column-mask rewrite — engine-agnostic, no Cedar dependency. |
 | [`cedar-oci`](crates/cedar-oci) | `olai-cedar-oci` | A Cedar policy provider backed by OCI-distributed policy bundles, with the generated `hydrofoil.policy` gRPC types. |
 
-`datafusion-cedar` depends on `datafusion-policy` and `cedar-oci`.
+`datafusion-policy-cedar` depends on `datafusion-policy` and `cedar-oci`.
 
 ## How it attaches to a session
 
-`datafusion-cedar` exposes a session-extension seam symmetric with other
+`datafusion-policy-cedar` exposes a session-extension seam symmetric with other
 DataFusion cross-cutting concerns: `PolicyExtension::builder()…instrument(state)`
 wraps the session's `QueryPlanner` with a `PolicyQueryPlanner` that, per query,
 resolves the principal, gathers facts, runs the Cedar decision, and — when the
@@ -36,7 +36,7 @@ before it executes. Per-request context flows through typed `SessionConfig`
 extensions, so the host stays unaware of the internals.
 
 See [`docs/policy-fact-gathering.md`](docs/policy-fact-gathering.md) and the
-runnable [`fact_gathering_walkthrough`](crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs)
+runnable [`fact_gathering_walkthrough`](crates/datafusion-policy-cedar/examples/fact_gathering_walkthrough.rs)
 example.
 
 ## Development

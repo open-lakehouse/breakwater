@@ -18,7 +18,7 @@ use datafusion::sql::TableReference;
 /// constraints apply* (fine-grained row filters + column masks), and the
 /// enforcement layer (the [`PolicyQueryPlanner`](crate::PolicyQueryPlanner)
 /// wrapper + the plan rewrite) applies the answers. The trait names no engine
-/// type — the `datafusion-cedar`
+/// type — the `datafusion-policy-cedar`
 /// Cedar adapter implements it today, and an OPA or OpenFGA adapter could
 /// implement it without touching enforcement.
 ///

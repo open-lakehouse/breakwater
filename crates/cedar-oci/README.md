@@ -11,7 +11,7 @@ Cedar answers the fundamental authorization question:
 `cedar-oci` supplies the policy sets, schemas, and entities that decision from
 an OCI registry — policy is distributed and versioned like any other OCI
 artifact, fetched at runtime rather than vendored into the binary. It is the
-policy-provider half of [`datafusion-cedar`](https://docs.rs/olai-datafusion-cedar),
+policy-provider half of [`datafusion-policy-cedar`](https://docs.rs/olai-datafusion-policy-cedar),
 which wires Cedar enforcement into an Apache DataFusion query session.
 
 Part of [breakwater](https://github.com/open-lakehouse/breakwater).

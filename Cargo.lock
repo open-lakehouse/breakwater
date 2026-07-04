@@ -3018,7 +3018,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "olai-datafusion-cedar"
+name = "olai-datafusion-policy"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "datafusion",
+ "datafusion-common",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "olai-datafusion-policy-cedar"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -3030,18 +3042,6 @@ dependencies = [
  "smol_str",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "olai-datafusion-policy"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "dashmap",
- "datafusion",
- "datafusion-common",
- "thiserror",
- "tokio",
 ]
 
 [[package]]

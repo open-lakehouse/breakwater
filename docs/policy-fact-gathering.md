@@ -4,7 +4,7 @@
 > (`platform-policy-architecture.md`, `policy-enforcement-design.md`,
 > `docs/adr/0005`–`0007`) that describe the enclosing platform's session
 > integration and live in the [hydrofoil](https://github.com/open-lakehouse/hydrofoil)
-> repo. The `datafusion-cedar` / `cedar-oci` crates here own the reusable
+> repo. The `datafusion-policy-cedar` / `cedar-oci` crates here own the reusable
 > mechanism; hydrofoil is the reference host that composes it.
 
 > The operational companion to `docs/platform-policy-architecture.md`. That
@@ -13,7 +13,7 @@
 > state). This one zooms into the half that was only sketched: **how the inputs
 > (facts) for a Cedar decision are gathered, and how evaluation proceeds**, across
 > the catalog → engine → agent-tool chain. It is validated by a runnable
-> walkthrough — `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs` —
+> walkthrough — `crates/datafusion-policy-cedar/examples/fact_gathering_walkthrough.rs` —
 > that supplies facts at each decision point and runs real Cedar evaluations over
 > the **real** `InMemoryFactStore` and the `PrincipalEnrichment`/`to_entities()`
 > membership shape (not mocks). The
@@ -136,7 +136,7 @@ resource entity (`resource.owner/readers/writers/tags/column_tags`) and discards
 after the decision. See `docs/adr/0007-fact-gathering-pips.md`.
 
 ### Session fact store (shared-session-scoped) — **built**
-The one piece that needs persistence. The `FactStore` trait (`datafusion-cedar`):
+The one piece that needs persistence. The `FactStore` trait (`datafusion-policy-cedar`):
 record a taint and query observed taints by correlation id; accrual is
 **monotonic** per session. Written at ②/③ by the governance PEP (`govern_plan`)
 as the engine reads tagged columns; read at ④ (`Policy::tool_policy` /
@@ -176,7 +176,7 @@ noting it is exactly the artifact a B-mode design would cache.
 
 ## The walkthrough (what the example proves)
 
-`cargo run -p olai-datafusion-cedar --example fact_gathering_walkthrough --features
+`cargo run -p olai-datafusion-policy-cedar --example fact_gathering_walkthrough --features
 governance` exercises **real** `is_authorized` / `is_authorized_partial` calls
 over the committed `config/policies/` model (plus two minimal inline policies),
 with facts supplied at each point:
@@ -231,5 +231,5 @@ demonstrates fact-gathering *and* evaluation, not a scripted output.
 - `docs/typed-fgac-seams.md` — how typed residuals + governed tags + catalog
   functions lower to row filters and column masks (the two-layer enforcement this
   builds on).
-- `crates/datafusion-cedar/examples/fact_gathering_walkthrough.rs` — the runnable
+- `crates/datafusion-policy-cedar/examples/fact_gathering_walkthrough.rs` — the runnable
   validation of this design.

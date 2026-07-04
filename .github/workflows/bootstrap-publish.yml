@@ -10,7 +10,7 @@ name: Bootstrap publish
 # takes over for all subsequent releases.
 #
 # Publish in dependency order: `olai-datafusion-policy` and `olai-cedar-oci`
-# first, then `olai-datafusion-cedar` (which depends on them — its dry-run only
+# first, then `olai-datafusion-policy-cedar` (which depends on them — its dry-run only
 # resolves once its deps are on crates.io). The `crate` input is a *package*
 # name (the `olai-` published name), passed straight to `cargo publish -p`. Run
 # this workflow ONCE per new crate, then never again for it. When all three are
@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       crate:
-        description: "Package name to bootstrap-publish (olai-datafusion-policy | olai-cedar-oci | olai-datafusion-cedar)"
+        description: "Package name to bootstrap-publish (olai-datafusion-policy | olai-cedar-oci | olai-datafusion-policy-cedar)"
         required: true
         type: string
       dry_run:

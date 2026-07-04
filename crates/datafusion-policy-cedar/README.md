@@ -1,4 +1,4 @@
-# datafusion-cedar
+# datafusion-policy-cedar
 
 [Cedar](https://www.cedarpolicy.com/) adapter for the engine-neutral
 [`datafusion-policy`](https://docs.rs/olai-datafusion-policy) layer — Cedar-backed
@@ -25,11 +25,11 @@ public surface is re-exported here so a Cedar host imports one crate.
 
 ## Attaching to a session
 
-`datafusion-cedar` exposes a session-extension seam symmetric with other
+`datafusion-policy-cedar` exposes a session-extension seam symmetric with other
 DataFusion cross-cutting concerns (e.g. `datafusion-openlineage`):
 
 ```rust,ignore
-use datafusion_cedar::{PolicyExtension, PolicySessionExt};
+use datafusion_policy_cedar::{PolicyExtension, PolicySessionExt};
 
 // Wrap the session's QueryPlanner with a PolicyQueryPlanner that resolves the
 // principal, gathers facts, and runs the Cedar decision per query.
@@ -45,7 +45,7 @@ crate.
 ## Example
 
 ```sh
-cargo run -p olai-datafusion-cedar --example fact_gathering_walkthrough --features fgac
+cargo run -p olai-datafusion-policy-cedar --example fact_gathering_walkthrough --features fgac
 ```
 
 steps through the catalog → engine → agent decision points, supplies the facts

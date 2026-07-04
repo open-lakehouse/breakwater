@@ -7,7 +7,7 @@
 //! - **Decide** — the [`PolicyEngine`] trait: the contract a policy engine
 //!   implements to answer *what is allowed* (coarse gate) and *what constraints
 //!   apply* (row filters + column masks). It names no engine type; a Cedar
-//!   adapter lives in [`datafusion-cedar`](https://docs.rs/olai-datafusion-cedar),
+//!   adapter lives in [`datafusion-policy-cedar`](https://docs.rs/olai-datafusion-policy-cedar),
 //!   and an OPA or OpenFGA adapter could implement the same trait.
 //! - **Enforce** — the [`PolicyQueryPlanner`] (a `QueryPlanner` wrapper) and the
 //!   pre-optimize plan rewrite ([`govern_plan`], under `fgac`) that apply

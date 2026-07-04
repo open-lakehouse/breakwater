@@ -19,7 +19,7 @@ query sessions**. It is two crates:
   implements both `SimplePolicySetProvider` and `SimpleEntityProvider` from
   `cedar-local-agent`). Also carries generated `hydrofoil.policy` gRPC types — an
   unused remote-PDP surface, not wired into enforcement.
-- **`crates/datafusion-cedar`** — the DataFusion-aware enforcement layer (the
+- **`crates/datafusion-policy-cedar`** — the DataFusion-aware enforcement layer (the
   substance). Depends on `cedar-oci`.
 
 Workspace: edition 2024, Rust 1.91, `datafusion 54`, `cedar-policy 4.8.2`,
@@ -58,7 +58,7 @@ These seams are sound and stay:
 
 | Concern | Type / file | Keep? |
 | --- | --- | --- |
-| **Decide** contract | `Policy` trait — `crates/datafusion-cedar/src/policy.rs` | rename+neutralize (§5) |
+| **Decide** contract | `Policy` trait — `crates/datafusion-policy-cedar/src/policy.rs` | rename+neutralize (§5) |
 | Cedar decide impl | `CedarPolicy<P,E>` — `src/cedar.rs` (generic over policy/entity providers) | becomes the adapter |
 | **Enforce** hook | `PolicyQueryPlanner` — `src/rule.rs` | keep as-is |
 | Row/mask rewrite | `GovernRewriter` (`TreeNodeRewriter`) — `src/govern.rs` | keep as-is |
@@ -120,11 +120,11 @@ OPA or OpenFGA:
 - `PrincipalIdentity.uid: cedar_oci::EntityUid`;
   `PrincipalIdentity.attributes: HashMap<String, cedar_policy::RestrictedExpression>`;
   it also carries `group_entities: Vec<cedar_policy::Entity>`.
-- `crates/datafusion-cedar/src/lib.rs` re-exports
+- `crates/datafusion-policy-cedar/src/lib.rs` re-exports
   `cedar_oci::{Decision, EntityId, EntityTypeName, EntityUid}` and
   `cedar_policy::{Entity, RestrictedExpression}` as the "single import surface" —
   so every consumer of the "neutral" trait imports Cedar.
-- The crate is *named* `datafusion-cedar`, structurally implying Cedar is the
+- The crate is *named* `datafusion-policy-cedar`, structurally implying Cedar is the
   layer rather than one adapter behind it.
 
 The `TablePolicy` carrier (`row_filters: Vec<Expr>`, `column_masks:
@@ -188,7 +188,7 @@ shape, all reducible to our neutral `TablePolicy`:
    this iteration. The neutrality grep-gate (below) is what proves the seam admits
    them.
 2. **Crate split: full split now.** Create a new neutral `datafusion-policy` crate
-   and slim `datafusion-cedar` to just the adapter. Rename `Policy` →
+   and slim `datafusion-policy-cedar` to just the adapter. Rename `Policy` →
    `PolicyEngine` and `ResidualTranslator` → `ConstraintTranslator`. Stop
    re-exporting Cedar types from the neutral surface.
 3. **Cedar `tpe` migration: follow-up PR, not now.** Keep the untyped
@@ -201,7 +201,7 @@ relocation.
 
 1. **`refactor: introduce neutral Decision + AttrValue types`**
    Add a neutral `enum Decision { Allow, Deny }` and a neutral principal attribute
-   value type in `datafusion-cedar` (temporary home). Cedar adapter maps
+   value type in `datafusion-policy-cedar` (temporary home). Cedar adapter maps
    `cedar_policy::Decision` → neutral `Decision`.
    ```rust
    pub enum AttrValue { String(String), Long(i64), Bool(bool), Set(Vec<AttrValue>) }
@@ -235,18 +235,18 @@ relocation.
    Keep `StaticPolicy` (rename to match) as the non-Cedar impl proving the trait
    needs no Cedar. `TablePolicy` carrier unchanged; document `col(id).in_list(...)`
    as a supported row-filter shape (for OpenFGA later).
-4. **`refactor: split datafusion-policy (neutral) out of datafusion-cedar`**
+4. **`refactor: split datafusion-policy (neutral) out of datafusion-policy-cedar`**
    Create `crates/datafusion-policy`. Move into it: `engine.rs` (ex-`policy.rs`),
    neutral `PrincipalIdentity`/`IdentityProvider`, `facts.rs`, `fact_store.rs`,
    `govern.rs`, `rule.rs`, `session.rs`, the `ConstraintTranslator` *trait*, and
    the **neutral half of `visitor.rs`** (`AuthorizationVisitor` + `PlanAction`
    enum — the "what does the plan touch" analysis every engine needs). Leave in
-   `datafusion-cedar`: `CedarPolicyEngine` (ex-`CedarPolicy`), Cedar
+   `datafusion-policy-cedar`: `CedarPolicyEngine` (ex-`CedarPolicy`), Cedar
    request-building (`authorize_plan`, `table_context`, `tool_context`, action
    `EntityUid` statics, `PlanRequest`), the Cedar residual→`TablePolicy` mapping,
    and `CedarResidualTranslator`. Expose the neutral `PlanAction` list to the
    adapter via a small pub API. Update root `Cargo.toml` members + intra-workspace
-   deps; `datafusion-cedar` now depends on `datafusion-policy` + `cedar-oci`.
+   deps; `datafusion-policy-cedar` now depends on `datafusion-policy` + `cedar-oci`.
    Fix `lib.rs` re-exports so the neutral crate exports **no** Cedar types.
 5. **`docs: document the pluggable decide/enforce architecture`**
    A short `docs/` page: the decide/enforce split, the `PolicyEngine` adapter
@@ -261,8 +261,8 @@ relocation.
    `Schema` — `cedar-oci` already parses a schema layer; wire it through.
 
 ### Representative files to touch (steps 1–4)
-`crates/datafusion-cedar/src/{lib,policy,principal,cedar,translate,visitor,facts,fact_store,govern,rule,session}.rs`,
-root `Cargo.toml`, `crates/datafusion-cedar/Cargo.toml`, new
+`crates/datafusion-policy-cedar/src/{lib,policy,principal,cedar,translate,visitor,facts,fact_store,govern,rule,session}.rs`,
+root `Cargo.toml`, `crates/datafusion-policy-cedar/Cargo.toml`, new
 `crates/datafusion-policy/Cargo.toml` + `src/lib.rs`.
 
 ## 8. Non-goals / out of scope
@@ -289,7 +289,7 @@ root `Cargo.toml`, `crates/datafusion-cedar/Cargo.toml`, new
 - **Neutrality grep-gate** (the invariant that proves pluggability): after the
   split, `crates/datafusion-policy/src` must contain **zero** `cedar_policy::` or
   `cedar_oci::` imports. Worth encoding as a tiny CI check or a test.
-- `cargo run -p olai-datafusion-cedar --example fact_gathering_walkthrough --features fgac`
+- `cargo run -p olai-datafusion-policy-cedar --example fact_gathering_walkthrough --features fgac`
   still runs end-to-end. Caveat: it reads `config/policies/` fixtures that live in
   the host repo, so it may only run in a host checkout — confirm current behavior
   before and after so you know whether a break is real.
