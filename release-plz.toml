@@ -1,0 +1,92 @@
+# release-plz configuration — automated, independent per-crate releases.
+#
+# release-plz (https://release-plz.dev) is the Rust-native release tool (NOT
+# Google's release-please). It analyzes conventional commits *per crate* to
+# compute semver bumps, regenerates per-crate changelogs, keeps intra-workspace
+# dependency version requirements in sync, and publishes to crates.io in
+# topological order. PR titles are gated by .github/workflows/pr-title.yml; see
+# CONTRIBUTING.md for the end-to-end flow.
+#
+# Both crates are libraries published to crates.io. release-plz publishes in
+# dependency order: cedar-oci first, then datafusion-cedar (which depends on it).
+#
+# FIRST-PUBLISH BOOTSTRAP: crates.io OIDC trusted publishing (what the release
+# job uses) cannot create a crate name that has never existed. Each crate below
+# therefore carries `release = false` until it has been bootstrap-published once
+# with a token (see .github/workflows/bootstrap-publish.yml) and its Trusted
+# Publisher is registered on crates.io. Drop the `release = false` for a crate
+# the moment its OIDC publisher is live; delete the bootstrap workflow + revoke
+# the token once both crates are on OIDC.
+#
+# Config reference: https://release-plz.dev/docs/config
+
+[workspace]
+# Link PRs/commits in the generated changelog back to the repo.
+repo_url = "https://github.com/open-lakehouse/breakwater"
+
+# --- Versioning / changelog ---
+changelog_update = true        # regenerate per-crate CHANGELOG.md on each release
+dependencies_update = false    # don't `cargo update` during the release PR —
+                               # keeps Cargo.lock churn out of release commits
+semver_check = true            # run cargo-semver-checks before bumping, to catch
+                               # accidental breaking changes in published crates
+
+# --- Git tags & GitHub releases (per-crate) ---
+# Per-crate tags, e.g. `cedar-oci-v0.0.1` / `datafusion-cedar-v0.0.1`.
+git_tag_enable = true
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_enable = true
+git_release_name = "{{ package }} v{{ version }}"
+git_release_body = "{{ changelog }}"
+
+# --- Publishing ---
+# release-plz runs `cargo publish` itself, in dependency order. With
+# `id-token: write` in the workflow it performs crates.io OIDC publishing, so
+# NO CARGO_REGISTRY_TOKEN is required (in steady state).
+publish = true
+publish_timeout = "30m"        # protoc/codegen crates are slow to verify
+
+# --- Release PR appearance ---
+pr_labels = ["release"]
+pr_draft = false
+
+# ---------------------------------------------------------------------------
+# Per-package overrides — bootstrap gating.
+# Remove each `release = false` once that crate's Trusted Publisher is
+# registered on crates.io (see the header). Until then release-plz still
+# versions/changelogs/tags the crate; it just doesn't `cargo publish` it.
+# ---------------------------------------------------------------------------
+[[package]]
+name = "cedar-oci"
+release = false
+
+[[package]]
+name = "datafusion-cedar"
+release = false
+
+# ---------------------------------------------------------------------------
+# Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
+# Because commits use crate scopes (feat(cedar-oci): ...), each crate's
+# changelog naturally contains only commits that touched its files.
+# ---------------------------------------------------------------------------
+[changelog]
+protect_breaking_commits = true
+sort_commits = "newest"
+
+commit_parsers = [
+  { message = "^feat",     group = "Added" },
+  { message = "^fix",      group = "Fixed" },
+  { message = "^perf",     group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^doc",      group = "Documentation" },
+  { message = "^build",    group = "Build" },
+  { message = "^test",     skip = true },
+  { message = "^chore",    skip = true },
+  { message = "^ci",       skip = true },
+]
+
+# Strip the redundant "(scope)" from each rendered line — each crate's changelog
+# is already crate-scoped.
+commit_preprocessors = [
+  { pattern = '\((cedar-oci|oci|datafusion-cedar|cedar|policy)\)', replace = "" },
+]

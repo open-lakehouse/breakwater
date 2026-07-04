@@ -1,0 +1,17 @@
+version: v2
+modules:
+  - path: proto/hydrofoil-policy
+    name: buf.build/hydrofoil/policy
+  - path: proto/cedar-policy-core
+    name: buf.build/cedar/policy-core
+  - path: proto/cedar-policy-validator
+    name: buf.build/cedar/policy-validator
+lint:
+  except:
+    - FIELD_NOT_REQUIRED
+    - PACKAGE_NO_IMPORT_CYCLE
+  disallow_comment_ignores: true
+breaking:
+  except:
+    - EXTENSION_NO_DELETE
+    - FIELD_SAME_DEFAULT

@@ -1,0 +1,85 @@
+name: Release-plz
+
+# Automated releases. On every push to `main`, release-plz opens/updates a
+# single "Release PR" containing per-crate version bumps + regenerated
+# changelogs. When that PR is merged, release-plz creates the per-crate git
+# tags + GitHub Releases and publishes to crates.io in dependency order
+# (cedar-oci before datafusion-cedar) over OIDC — no registry token.
+#
+# A crate only publishes once its `release = false` gate is removed in
+# release-plz.toml (i.e. after its one-time bootstrap + Trusted Publisher
+# registration; see bootstrap-publish.yml). See release-plz.toml and
+# CONTRIBUTING.md for the full flow.
+
+on:
+  push:
+    branches:
+      - main
+
+# Least privilege: grant per job, nothing at the top level.
+permissions: {}
+
+jobs:
+  # --- Open/update the Release PR (version bumps + changelogs) ---
+  release-plz-pr:
+    name: Release PR
+    if: ${{ github.repository == 'open-lakehouse/breakwater' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # push the release-plz-* branch
+      pull-requests: write # create/update the Release PR
+    concurrency:
+      group: release-plz-pr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # release-plz needs full history to analyze commits
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.96"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "31.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run release-plz (release-pr)
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- Tag + GitHub Release + cargo publish, after the Release PR is merged ---
+  release-plz-release:
+    name: Release
+    if: ${{ github.repository == 'open-lakehouse/breakwater' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: release # protected env gating the crates.io publish
+    permissions:
+      contents: write # create tags + GitHub Releases
+      id-token: write # crates.io OIDC publish
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.96"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "31.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # No CARGO_REGISTRY_TOKEN: crates.io publish authenticates via OIDC
+      # (`id-token: write`).
+      - name: Run release-plz (release)
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

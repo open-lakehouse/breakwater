@@ -1,0 +1,26 @@
+# Spell-check configuration for `crate-ci/typos`.
+
+[default]
+extend-ignore-re = [
+    # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
+    "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
+    # Line block with # spellchecker:<on|off>
+    "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
+    "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
+]
+
+[default.extend-words]
+# to avoid having to name fields r#type
+typ = "typ"
+
+# Pluralized SQL keywords in prose/tests ("SELECTs", "INSERTs"): typos strips the
+# trailing "s" and flags the stem as a misspelling of SELECT / INSERT.
+selec = "selec"
+inser = "inser"
+
+# We only want typos to police code we own. The generated proto stubs carry
+# upstream-owned tokens and are overwritten on regeneration.
+[files]
+extend-exclude = [
+    "crates/cedar-oci/src/gen/",
+]
