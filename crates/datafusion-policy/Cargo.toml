@@ -18,7 +18,6 @@ dashmap = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 [features]
 default = []

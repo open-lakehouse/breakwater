@@ -23,8 +23,8 @@ use crate::principal::PrincipalIdentity;
 
 /// The fine-grained enforcement that applies to one table for one principal.
 ///
-/// This is the engine-neutral carrier every [`PolicyEngine`](crate::PolicyEngine)
-/// reduces its native fine-grained shape to: a Cedar residual boolean, an OPA
+/// This is the engine-neutral carrier every [`PolicyEngine`] reduces its native
+/// fine-grained shape to: a Cedar residual boolean, an OPA
 /// residual, or an OpenFGA `ListObjects` id set all land in `row_filters` /
 /// `column_masks` as DataFusion [`Expr`]s.
 #[derive(Debug, Clone, Default)]

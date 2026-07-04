@@ -16,10 +16,11 @@ use datafusion::sql::TableReference;
 /// This is the "decide" half of the decide/enforce split: a
 /// [`PolicyEngine`] answers *what is allowed* (coarse gate) and *what
 /// constraints apply* (fine-grained row filters + column masks), and the
-/// enforcement layer (the [`QueryPlanner`](crate::PolicyQueryPlanner) wrapper +
-/// the plan rewrite) applies the answers. The trait names no engine type — a
-/// Cedar adapter ([`CedarPolicy`](crate::CedarPolicy)) implements it today, and
-/// an OPA or OpenFGA adapter could implement it without touching enforcement.
+/// enforcement layer (the [`PolicyQueryPlanner`](crate::PolicyQueryPlanner)
+/// wrapper + the plan rewrite) applies the answers. The trait names no engine
+/// type — the `datafusion-cedar`
+/// Cedar adapter implements it today, and an OPA or OpenFGA adapter could
+/// implement it without touching enforcement.
 ///
 /// Layer 1 is the coarse allow/deny of [`is_allowed`](PolicyEngine::is_allowed)
 /// over the tables/actions a query references; the principal is passed as a

@@ -1652,7 +1652,6 @@ dependencies = [
  "datafusion-common",
  "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]
