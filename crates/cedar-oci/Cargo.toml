@@ -1,0 +1,28 @@
+[package]
+name = "cedar-oci"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Cedar policy provider backed by OCI-distributed policy bundles, with generated hydrofoil.policy gRPC types"
+repository = "https://github.com/open-lakehouse/breakwater"
+homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/cedar-oci"
+documentation = "https://docs.rs/cedar-oci"
+readme = "README.md"
+keywords = ["cedar", "authorization", "oci", "policy"]
+categories = ["authentication", "api-bindings"]
+
+[dependencies]
+async-trait = { workspace = true }
+cedar-local-agent = { workspace = true }
+cedar-policy = { workspace = true }
+prost = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+tracing = { workspace = true }
+
+oci-client = "0.16.0"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

@@ -1,0 +1,13 @@
+syntax = "proto3";
+package hydrofoil.policy;
+
+message EntityTagAssignment {
+  // The fully qualified name of the entity to which the tag is assigned
+  string entity_name = 1;
+  // The type of the entity to which the tag is assigned. Allowed values are: catalogs, schemas, tables, columns, volumes.
+  string entity_type = 2;
+  // The key of the tag
+  string tag_key = 3;
+  // The value of the tag
+  string tag_value = 4;
+}

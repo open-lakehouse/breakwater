@@ -1,0 +1,46 @@
+[package]
+name = "datafusion-cedar"
+version = "0.0.1"
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+description = "Cedar policy enforcement (access gate + row/column governance) for Apache DataFusion sessions"
+repository = "https://github.com/open-lakehouse/breakwater"
+homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/datafusion-cedar"
+documentation = "https://docs.rs/datafusion-cedar"
+readme = "README.md"
+keywords = ["datafusion", "cedar", "authorization", "governance"]
+categories = ["database", "authentication"]
+
+[dependencies]
+cedar-oci = { workspace = true }
+
+async-trait = { workspace = true }
+cedar-local-agent = { workspace = true }
+cedar-policy = { workspace = true }
+dashmap = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+# Layer 2 fine-grained governance (row filters + column masks) via Cedar
+# partial evaluation. Off by default; pulls the partial-eval feature through
+# the cedar stack when enabled, and the residual translator (serde_json).
+governance = [
+    "cedar-policy/partial-eval",
+    "cedar-local-agent/partial-eval",
+    "dep:serde_json",
+]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+# End-to-end fact-gathering & policy-evaluation walkthrough (docs/policy-fact-gathering.md).
+# Needs `governance` for the partial-eval (residual) decision point.
+[[example]]
+name = "fact_gathering_walkthrough"
+required-features = ["governance"]

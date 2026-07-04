@@ -1,0 +1,69 @@
+//! Cedar policy enforcement for Apache DataFusion.
+//!
+//! This crate is the DataFusion-aware, reusable half of the policy stack — the
+//! policy analog of `datafusion-openlineage`. It owns the [`Policy`] trait, the
+//! Cedar-backed implementation ([`CedarPolicy`]), and the
+//! [`LogicalPlan`](datafusion::logical_expr::LogicalPlan) walk that turns a
+//! query into a set of Cedar authorization requests. Policy *sourcing* (pulling
+//! a policy set / schema / entities from an OCI registry) lives in the
+//! [`cedar-oci`](https://docs.rs/cedar-oci) crate; engine-specific *glue*
+//! (extracting the principal from a request, composing onto a session) lives in
+//! the host — see [hydrofoil](https://github.com/open-lakehouse/hydrofoil) for a
+//! reference host.
+//!
+//! Two layers:
+//!
+//! - **Layer 1 — coarse access gate** ([`Policy::is_allowed`]): does the
+//!   principal have access to the tables/actions a query references?
+//! - **Layer 2 — fine-grained governance** (feature `governance`): row filters
+//!   and column masks derived from Cedar partial-evaluation residuals.
+
+mod cedar;
+mod facts;
+mod policy;
+mod principal;
+mod rule;
+mod session;
+mod visitor;
+
+#[cfg(feature = "governance")]
+mod fact_store;
+#[cfg(feature = "governance")]
+pub mod govern;
+#[cfg(feature = "governance")]
+mod translate;
+
+pub use cedar::CedarPolicy;
+pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
+pub use policy::{Policy, StaticPolicy};
+pub use principal::{
+    AgentClaims, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
+    PrincipalIdentity,
+};
+pub use rule::PolicyQueryPlanner;
+pub use session::{
+    CatalogFactSinkExt, EvalContextProvider, PolicyBuilder, PolicyExtension, PolicySessionExt,
+    PrincipalExt, PrincipalProvider, SessionConfigEvalContextProvider,
+    SessionConfigPrincipalProvider, authorize_and_govern, instrument_session_state,
+};
+
+#[cfg(feature = "governance")]
+pub use fact_store::{FactStore, InMemoryFactStore};
+#[cfg(feature = "governance")]
+pub use govern::{TablePolicy, govern_plan};
+#[cfg(feature = "governance")]
+pub use session::FactStoreExt;
+#[cfg(feature = "governance")]
+pub use translate::{CedarResidualTranslator, ResidualTranslator};
+
+// Re-export the cedar identity/decision types through this crate so consumers
+// have a single import surface (they originate in `cedar-oci`).
+pub use cedar_oci::{Decision, EntityId, EntityTypeName, EntityUid};
+
+// Cedar value/entity types the host needs to build principal/resource
+// attributes and the group-entity closure for identity enrichment.
+pub use cedar_policy::{Entity, RestrictedExpression};
+
+// Cedar provider traits a `CedarPolicy` is generic over, re-exported for
+// consumers building an authorizer.
+pub use cedar_local_agent::public::{SimpleEntityProvider, SimplePolicySetProvider};

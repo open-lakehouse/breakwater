@@ -1,0 +1,26 @@
+syntax = "proto3";
+package hydrofoil.policy;
+
+import "cedar_policy_core/core.proto";
+
+message GetPolicyRequest {
+  string policy_id = 1;
+}
+
+message GetPolicyResponse {
+  string policy_data = 1;
+}
+
+message IsAllowedRequest {
+  cedar_policy_core.Request request = 1;
+}
+
+message IsAllowedResponse {
+  bool allowed = 1;
+}
+
+service PolicyService {
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse);
+
+  rpc IsAllowed(IsAllowedRequest) returns (IsAllowedResponse);
+}

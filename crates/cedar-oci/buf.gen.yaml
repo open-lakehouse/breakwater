@@ -1,0 +1,26 @@
+# Invoke from THIS crate directory (crates/cedar-oci) so the relative `inputs`
+# and `out` paths resolve against the repo-root `proto/` and `src/gen`:
+#
+#   cd crates/cedar-oci
+#   buf generate --template buf.gen.yaml
+#   rustfmt --edition 2024 src/gen/hydrofoil/policy/hydrofoil.policy.rs
+#
+# The generated file is `include!`d (see src/proto.rs), so `cargo fmt` does not
+# reach it — format it directly with rustfmt as shown.
+version: v2
+managed:
+  enabled: true
+inputs:
+  - directory: ../../proto/hydrofoil-policy/
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.5.0
+    out: src/gen
+    opt:
+      - bytes=.
+      - compile_well_known_types=true
+      - extern_path=.cedar_policy_core=::cedar_policy::proto::models
+      - extern_path=.cedar_policy_validator=::cedar_policy::proto::models
+      - file_descriptor_set=false
+      - enable_type_names=true
+  - remote: buf.build/community/neoeinstein-tonic:v0.5.0
+    out: src/gen

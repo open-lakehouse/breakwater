@@ -1,0 +1,293 @@
+//
+// Copyright Cedar Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+package cedar_policy_core;
+
+message Request {
+  EntityUid principal = 1;
+  EntityUid action = 2;
+  EntityUid resource = 3;
+  map<string, Expr> context = 4;
+}
+
+// the protobuf PolicySet message describes a complete policy set, including
+// templates, static policies, and/or template-linked policies.
+message PolicySet {
+  // Both templates and static policies are included here, with static
+  // policies represented as templates with zero slots.
+  repeated TemplateBody templates = 1;
+  // All static policies and template-linked policies are included here.
+  // Static policies must appear exactly once, and the PolicyID of the static
+  // policy must be the same in this list and the above list.
+  repeated Policy links = 2;
+}
+
+message Entities {
+  repeated Entity entities = 1;
+}
+
+message EntityUid {
+  Name ty = 1;
+  string eid = 2;
+}
+
+message Name {
+  string id = 1;
+  repeated string path = 2;
+}
+
+// the protobuf Policy message describes either a static or a template-linked policy.
+message Policy {
+  // ID of the template associated with this policy.
+  // For static policies, this is the ID of a zero-slot template.
+  string template_id = 1;
+  // ID of this policy itself.
+  // For static policies, this is omitted/ignored; the ID of the policy is the
+  // `template_id`.
+  optional string link_id = 2;
+  // Whether this policy is a static (false) or template-linked (true) policy
+  bool is_template_link = 3;
+  // Value of the `?principal` slot.
+  // Omitted/ignored for templates without the `?principal` slot.
+  EntityUid principal_euid = 4;
+  // Value of the `?resource` slot.
+  // Omitted/ignored for templates without the `?resource` slot.
+  EntityUid resource_euid = 5;
+}
+
+enum Effect {
+  Forbid = 0;
+  Permit = 1;
+}
+
+message TemplateBody {
+  string id = 1;
+  map<string, string> annotations = 3;
+  Effect effect = 4;
+  PrincipalOrResourceConstraint principal_constraint = 5;
+  ActionConstraint action_constraint = 6;
+  PrincipalOrResourceConstraint resource_constraint = 7;
+  Expr non_scope_constraints = 8;
+}
+
+// an EntityReference may either be an EntityUid or a Slot.
+message EntityReference {
+  oneof data {
+    Slot slot = 1;
+    EntityUid euid = 2;
+  }
+
+  // if it's a Slot, we know from context which Slot it is,
+  // so we don't need a `SlotId` and can just use this one-armed enum
+  enum Slot {
+    // the one option for the enum
+    unit = 0;
+  }
+}
+
+message PrincipalOrResourceConstraint {
+  oneof data {
+    Any any = 1;
+    InMessage in = 2;
+    EqMessage eq = 3;
+    IsMessage is = 4;
+    IsInMessage isIn = 5;
+  }
+
+  // Zero-arity constructors represented as enums with only one member
+  enum Any {
+    // the one option for the enum
+    unit = 0;
+  }
+
+  message InMessage {
+    EntityReference er = 1;
+  }
+  message EqMessage {
+    EntityReference er = 1;
+  }
+  message IsMessage {
+    Name entity_type = 1;
+  }
+  message IsInMessage {
+    EntityReference er = 1;
+    Name entity_type = 2;
+  }
+}
+
+enum SlotId {
+  Principal = 0;
+  Resource = 1;
+}
+
+message ActionConstraint {
+  oneof data {
+    Any any = 1;
+    InMessage in = 2;
+    EqMessage eq = 3;
+  }
+
+  // Zero-arity constructors represented as enums with only one member
+  enum Any {
+    // the one option for the enum
+    unit = 0;
+  }
+
+  message InMessage {
+    repeated EntityUid euids = 1;
+  }
+  message EqMessage {
+    EntityUid euid = 1;
+  }
+}
+
+message Expr {
+  oneof expr_kind {
+    Literal lit = 1;
+    Var var = 2;
+    SlotId slot = 3;
+    If if = 4;
+    And and = 5;
+    Or or = 6;
+    UnaryApp uApp = 7;
+    BinaryApp bApp = 8;
+    ExtensionFunctionApp extApp = 9;
+    GetAttr getAttr = 10;
+    HasAttr hasAttr = 11;
+    Like like = 12;
+    Is is = 13;
+    Set set = 14;
+    Record record = 15;
+  }
+
+  message Literal {
+    oneof lit {
+      bool b = 1;
+      int64 i = 2;
+      string s = 3;
+      EntityUid euid = 4;
+    }
+  }
+
+  enum Var {
+    Principal = 0;
+    Action = 1;
+    Resource = 2;
+    Context = 3;
+  }
+
+  message If {
+    Expr test_expr = 1;
+    Expr then_expr = 2;
+    Expr else_expr = 3;
+  }
+
+  message And {
+    Expr left = 1;
+    Expr right = 2;
+  }
+
+  message Or {
+    Expr left = 1;
+    Expr right = 2;
+  }
+
+  message UnaryApp {
+    Op op = 1;
+    Expr expr = 2;
+
+    enum Op {
+      Not = 0;
+      Neg = 1;
+      IsEmpty = 2;
+    }
+  }
+
+  message BinaryApp {
+    Op op = 1;
+    Expr left = 2;
+    Expr right = 3;
+
+    enum Op {
+      Eq = 0;
+      Less = 1;
+      LessEq = 2;
+      Add = 3;
+      Sub = 4;
+      Mul = 5;
+      In = 6;
+      Contains = 7;
+      ContainsAll = 8;
+      ContainsAny = 9;
+      GetTag = 10;
+      HasTag = 11;
+    }
+  }
+
+  message ExtensionFunctionApp {
+    Name fn_name = 1;
+    repeated Expr args = 2;
+  }
+
+  message GetAttr {
+    Expr expr = 1;
+    string attr = 2;
+  }
+
+  message HasAttr {
+    Expr expr = 1;
+    string attr = 2;
+  }
+
+  message Like {
+    Expr expr = 1;
+    repeated PatternElem pattern = 2;
+
+    message PatternElem {
+      oneof data {
+        Wildcard wildcard = 1;
+        string c = 2;
+      }
+
+      // Zero-arity constructors represented as enums with only one member
+      enum Wildcard {
+        // the one option for the enum
+        unit = 0;
+      }
+    }
+  }
+
+  message Is {
+    Expr expr = 1;
+    Name entity_type = 2;
+  }
+
+  message Set {
+    repeated Expr elements = 1;
+  }
+
+  message Record {
+    map<string, Expr> items = 1;
+  }
+}
+
+message Entity {
+  EntityUid uid = 1;
+  map<string, Expr> attrs = 2;
+  repeated EntityUid ancestors = 3;
+  map<string, Expr> tags = 4;
+}
