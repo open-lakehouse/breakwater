@@ -3027,7 +3027,7 @@ dependencies = [
  "datafusion",
  "olai-cedar-oci",
  "olai-datafusion-policy",
- "serde_json",
+ "smol_str",
  "tokio",
  "tracing",
 ]

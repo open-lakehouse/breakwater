@@ -20,23 +20,24 @@ async-trait = { workspace = true }
 cedar-local-agent = { workspace = true }
 cedar-policy = { workspace = true }
 datafusion = { workspace = true }
-serde_json = { workspace = true, optional = true }
+smol_str = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [features]
 default = []
 # Layer 2 fine-grained access control (row filters + column masks) via Cedar
-# partial evaluation. Off by default; enables fgac in the neutral core,
-# pulls the partial-eval feature through the cedar stack, and the residual
-# translator (serde_json).
+# type-aware partial evaluation (TPE). Off by default; enables fgac in the
+# neutral core, pulls the tpe feature through the cedar stack (which produces
+# well-typed residuals validated against a schema), and smol_str for building the
+# native-tag maps TPE partial entities require.
 fgac = [
     "datafusion-policy/fgac",
-    "cedar-policy/partial-eval",
-    "cedar-local-agent/partial-eval",
-    "dep:serde_json",
+    "cedar-policy/tpe",
+    "dep:smol_str",
 ]
 
 [dev-dependencies]
+smol_str = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 # End-to-end fact-gathering & policy-evaluation walkthrough (docs/policy-fact-gathering.md).
