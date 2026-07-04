@@ -35,6 +35,10 @@ fgac = [
     "cedar-policy/tpe",
     "dep:smol_str",
 ]
+# Back-compat alias: hydrofoil (and other dependents) opt into the Layer 2
+# machinery via `datafusion-cedar/governance`. The feature was renamed to `fgac`
+# in the neutral-core split; this alias keeps dependents' feature maps working.
+governance = ["fgac"]
 
 [dev-dependencies]
 smol_str = { workspace = true }
