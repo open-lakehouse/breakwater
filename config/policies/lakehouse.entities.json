@@ -1,0 +1,55 @@
+[
+  {
+    "uid": { "type": "UserGroup", "id": "readers" },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "type": "UserGroup", "id": "privileged_readers" },
+    "attrs": {},
+    "parents": [{ "type": "UserGroup", "id": "readers" }]
+  },
+  {
+    "uid": { "type": "UserGroup", "id": "lakehouse_admins" },
+    "attrs": {},
+    "parents": []
+  },
+  {
+    "uid": { "type": "Tag", "id": "classification" },
+    "attrs": { "default_mask_fn": "hr.security.redact" },
+    "parents": []
+  },
+  {
+    "uid": { "type": "Table", "id": "prod.customers.accounts" },
+    "attrs": {
+      "region": "eu",
+      "readers": ["readers"],
+      "writers": ["lakehouse_admins"]
+    },
+    "tags": {},
+    "parents": []
+  },
+  {
+    "uid": { "type": "Column", "id": "prod.customers.accounts.ssn" },
+    "attrs": { "name": "ssn" },
+    "tags": { "pii": "ssn" },
+    "parents": [{ "type": "Table", "id": "prod.customers.accounts" }]
+  },
+  {
+    "uid": { "type": "Column", "id": "prod.customers.accounts.salary" },
+    "attrs": { "name": "salary" },
+    "tags": { "classification": "restricted" },
+    "parents": [{ "type": "Table", "id": "prod.customers.accounts" }]
+  },
+  {
+    "uid": { "type": "Column", "id": "prod.customers.accounts.region" },
+    "attrs": { "name": "region" },
+    "tags": {},
+    "parents": [{ "type": "Table", "id": "prod.customers.accounts" }]
+  },
+  {
+    "uid": { "type": "Tool", "id": "send_external" },
+    "attrs": {},
+    "parents": []
+  }
+]

@@ -1,0 +1,91 @@
+// Typed schema for the breakwater FGAC showcase (see docs/typed-fgac-seams.md).
+//
+// This schema is what type-aware partial evaluation (TPE) validates residuals
+// against. It models the Databricks Unity Catalog ABAC world in Cedar-native
+// terms:
+//
+//   - Governed tags are Cedar *entity tags* (`tags String` below): a key -> value
+//     map on Table and Column, populated from an external classification system
+//     (Lineage / UC). Policies read them with the native `resource.hasTag(k)` and
+//     `resource.getTag(k)` operators — the analog of UC `has_tag` / `has_tag_value`.
+//   - A `Tag` entity carries per-tag metadata, notably a default masking / row
+//     filter function, so a governed tag can name the function to apply wherever
+//     it lands (resolution level 2; a policy `@mask_fn` overrides it at level 1).
+//   - `read_table` governs row visibility (residual -> row filter); `read_column`
+//     governs a single column (residual -> column mask). The action distinguishes
+//     the two constraint kinds; no `@filter_type` annotation is needed.
+
+// A group principals belong to (for coarse `principal in <group>` gates).
+// Groups nest, so a group may be a member of another group.
+entity UserGroup in [UserGroup];
+
+// Human and machine principals. Both may belong to groups; `region`/`clearance`
+// are attributes governance policies compare against.
+entity User in [UserGroup] {
+    region: String,
+    clearance?: String,
+};
+entity Agent in [UserGroup] {
+    region?: String,
+    clearance?: String,
+};
+
+// Per-governed-tag metadata. `default_mask_fn` / `default_filter_fn` name a
+// catalog function (e.g. a UC SQL UDF) applied wherever the tag is present, unless
+// a policy names its own function.
+entity Tag {
+    default_mask_fn?: String,
+    default_filter_fn?: String,
+};
+
+// A table row. `region` is an ordinary row attribute a residual can compare to
+// the principal; `readers`/`writers` are coarse-gate ACLs; `tags` are governed
+// key->value tags on the table itself.
+entity Table {
+    region: String,
+    readers?: Set<String>,
+    writers?: Set<String>,
+} tags String;
+
+// A single column, a child of its table. Column tags are applied directly (UC
+// semantics: column tags do not inherit from the table).
+entity Column in [Table] {
+    name: String,
+} tags String;
+
+// A tool an agent may invoke (the agent-tool PEP resource).
+entity Tool;
+
+action read_table appliesTo {
+    principal: [User, Agent],
+    resource: [Table],
+    context: {
+        catalog?: String,
+        schema?: String,
+        table?: String,
+        columns?: Set<String>,
+    }
+};
+
+action write_table appliesTo {
+    principal: [User, Agent],
+    resource: [Table],
+};
+
+action read_column appliesTo {
+    principal: [User, Agent],
+    resource: [Column],
+    context: {
+        catalog?: String,
+        schema?: String,
+        table?: String,
+    }
+};
+
+action send_external appliesTo {
+    principal: [User, Agent],
+    resource: [Tool],
+    context: {
+        observed_taints?: Set<String>,
+    }
+};

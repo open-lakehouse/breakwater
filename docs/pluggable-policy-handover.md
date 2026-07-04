@@ -108,8 +108,8 @@ DataFusion-native way to transport per-request information the user asked us to
 lean into.
 
 Fail-closed is pervasive and must be preserved: missing principal, untranslatable
-residual, unmodeled state-changing DDL, provider error, `column_mask` without a
-`@column` → deny/mask, never open.
+residual, unmodeled state-changing DDL, provider error, TPE error, an unresolvable
+masking function → deny/mask, never open.
 
 ## 4. The core problem to fix — Cedar leaks through the "neutral" seam
 

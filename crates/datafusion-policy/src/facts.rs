@@ -15,7 +15,7 @@
 //! into one evaluation, never persisted. Shared-session-scoped facts (the taint
 //! ledger) live behind the [`FactStore`](crate::FactStore), not here.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -39,6 +39,17 @@ pub struct TableFacts {
     /// (`Record` of `Set<String>`), and the source of the taints recorded at
     /// the governance PEP when those columns are read.
     pub column_tags: HashMap<String, BTreeSet<String>>,
+    /// Governed **key→value** tags on the table itself (the Databricks UC ABAC
+    /// governed-tag model), folded into the Cedar `Table` entity's native tags so
+    /// policies can read `resource.hasTag(k)` / `resource.getTag(k)`. Distinct
+    /// from [`tags`](Self::tags) (an opaque classification set feeding taints):
+    /// these carry the key→value pairs governance policies match on.
+    pub governed_tags: BTreeMap<String, String>,
+    /// Column name → its governed **key→value** tags, folded into each `Column`
+    /// entity's native tags for `resource.hasTag`/`getTag` matching. The
+    /// per-column analog of [`governed_tags`](Self::governed_tags); column tags
+    /// are applied directly (UC semantics: they do not inherit from the table).
+    pub governed_column_tags: HashMap<String, BTreeMap<String, String>>,
 }
 
 impl TableFacts {
@@ -49,6 +60,8 @@ impl TableFacts {
             && self.writers.is_empty()
             && self.tags.is_empty()
             && self.column_tags.is_empty()
+            && self.governed_tags.is_empty()
+            && self.governed_column_tags.is_empty()
     }
 
     /// The union of the classification tags of any column in `accessed` — the
@@ -141,6 +154,12 @@ pub struct EvalContext {
     /// consumes it.
     #[cfg(feature = "fgac")]
     pub fact_store: Option<Arc<dyn crate::FactStore>>,
+    /// Resolves policy-referenced masking / row-filter functions (by name) into
+    /// callable [`ScalarUDF`](datafusion::logical_expr::ScalarUDF)s at the
+    /// governance PEP. `None` when no catalog function resolver is wired — a
+    /// policy that names a function then fails closed. Behind `fgac`.
+    #[cfg(feature = "fgac")]
+    pub function_resolver: Option<Arc<dyn crate::CatalogFunctionResolver>>,
 }
 
 impl std::fmt::Debug for EvalContext {
@@ -150,6 +169,8 @@ impl std::fmt::Debug for EvalContext {
             .field("correlation_id", &self.correlation_id);
         #[cfg(feature = "fgac")]
         s.field("fact_store", &self.fact_store.is_some());
+        #[cfg(feature = "fgac")]
+        s.field("function_resolver", &self.function_resolver.is_some());
         s.finish()
     }
 }

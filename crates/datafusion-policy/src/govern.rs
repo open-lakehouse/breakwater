@@ -272,6 +272,7 @@ mod tests {
             catalog_facts: sink,
             correlation_id: Some("session-1".to_string()),
             fact_store: Some(store.clone()),
+            function_resolver: None,
         };
         (eval, store)
     }

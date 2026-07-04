@@ -47,8 +47,8 @@ use cedar_local_agent::public::{
     EntityProviderError, PolicySetProviderError, SimpleEntityProvider, SimplePolicySetProvider,
 };
 use cedar_policy::{
-    Context, Entities, EntityId, EntityTypeName, EntityUid, PolicySet, Request, RequestBuilder,
-    RestrictedExpression, Schema,
+    Context, Entities, EntityId, EntityTypeName, EntityUid, PartialEntities, PartialEntity,
+    PartialEntityUid, PartialRequest, PolicySet, Request, RestrictedExpression, Schema,
 };
 use std::sync::Arc;
 
@@ -74,17 +74,18 @@ const POLICY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/poli
 
 /// Governance row-filter: a reader may only see rows whose `region` matches their
 /// own. With a concrete principal (`region == "eu"`) and an *unknown* resource,
-/// partial evaluation leaves the residual `resource.region == "eu"`, which lowers
-/// to `col("region") = "eu"`.
+/// type-aware partial evaluation leaves the residual `resource.region == "eu"`,
+/// which lowers to `col("region") = "eu"`. No `@filter_type` annotation is needed:
+/// the `read_table` action + surviving *permit* residual identify it as a row
+/// filter (see docs/typed-fgac-seams.md).
 const GOVERNANCE_POLICY: &str = r#"
 @id("region_row_filter")
-@filter_type("row_filter")
 permit (
     principal,
     action == Action::"read_table",
     resource
 )
-when { resource.region == principal.region };
+when { principal has region && resource.region == principal.region };
 "#;
 
 /// Agent guardrail: forbid the `send_external` tool when the session has observed
@@ -169,6 +170,13 @@ fn action(id: &str) -> EntityUid {
 fn table_resource(name: &str) -> EntityUid {
     EntityUid::from_type_name_and_id(
         EntityTypeName::from_str("Table").unwrap(),
+        EntityId::new(name),
+    )
+}
+
+fn tool_resource(name: &str) -> EntityUid {
+    EntityUid::from_type_name_and_id(
+        EntityTypeName::from_str("Tool").unwrap(),
         EntityId::new(name),
     )
 }
@@ -264,7 +272,7 @@ async fn main() {
         .expect("read lakehouse.cedar");
     let schema_src = std::fs::read_to_string(format!("{POLICY_DIR}/lakehouse.cedarschema"))
         .expect("read lakehouse.cedarschema");
-    let entities_src = std::fs::read_to_string(format!("{POLICY_DIR}/lakhouse.entities.json"))
+    let entities_src = std::fs::read_to_string(format!("{POLICY_DIR}/lakehouse.entities.json"))
         .expect("read entities");
 
     let (schema, _) = Schema::from_cedarschema_str(&schema_src).expect("parse cedar schema");
@@ -311,7 +319,7 @@ async fn main() {
     let req = Request::new(
         alice_uid.clone(),
         action("read_table"),
-        table_resource("protected_table"),
+        table_resource("prod.customers.accounts"),
         Context::empty(),
         None,
     )
@@ -335,7 +343,7 @@ async fn main() {
     let req = Request::new(
         r2d2_uid.clone(),
         action("write_table"),
-        table_resource("protected_table"),
+        table_resource("prod.customers.accounts"),
         Context::empty(),
         None,
     )
@@ -358,8 +366,8 @@ async fn main() {
     let req = Request::new(
         alice_uid.clone(),
         action("read_table"),
-        table_resource("protected_table"),
-        table_context("main", "sales", "protected_table", &["id", "region", "ssn"]),
+        table_resource("prod.customers.accounts"),
+        table_context("prod", "customers", "accounts", &["id", "region", "ssn"]),
         None,
     )
     .expect("request");
@@ -384,41 +392,55 @@ async fn main() {
     // `cedar::table_policy` does with `principal.to_entity()`. The governance
     // policy references only principal/resource attributes, so no hierarchy is
     // needed here.
-    let gov_entities =
-        Entities::from_entities(principal_entities(&alice).expect("principal entity"), None)
-            .expect("principal entity");
-    let gov = authorizer(
-        PolicySet::from_str(GOVERNANCE_POLICY).expect("governance policy set"),
-        gov_entities.clone(),
-    );
-    let partial = RequestBuilder::default()
-        .principal(alice_uid.clone())
-        .action(action("read_table"))
-        .unknown_resource_with_type(EntityTypeName::from_str("Table").unwrap())
-        .context(table_context("main", "sales", "protected_table", &[]))
-        .build();
-    let response = gov
-        .is_authorized_partial(&partial, &gov_entities)
-        .await
-        .expect("partial authz");
+    let gov_policies = PolicySet::from_str(GOVERNANCE_POLICY).expect("governance policy set");
+    // TPE takes the principal as a concrete partial entity carrying its attrs, and
+    // the resource as an unknown of a known type. The `read_table` permit's
+    // `resource.region == principal.region` folds `principal.region` to "eu",
+    // leaving `resource.region == "eu"` as the residual.
+    let principal_partial = PartialEntity::new(
+        alice_uid.clone(),
+        Some(
+            [(
+                smol_str::SmolStr::from("region"),
+                RestrictedExpression::new_string("eu".into()),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        Some(Default::default()),
+        None,
+        &schema,
+    )
+    .expect("principal partial entity");
+    let partial = PartialRequest::new(
+        PartialEntityUid::from_concrete(alice_uid.clone()),
+        action("read_table"),
+        PartialEntityUid::new(EntityTypeName::from_str("Table").unwrap(), None),
+        Some(table_context("prod", "customers", "accounts", &[])),
+        &schema,
+    )
+    .expect("partial request");
+    let partial_entities = PartialEntities::from_partial_entities([principal_partial], &schema)
+        .expect("partial entities");
+    let response = gov_policies
+        .tpe(&partial, &partial_entities, &schema)
+        .expect("type-aware partial evaluation");
     let translator = CedarResidualTranslator;
     println!("  facts: principal.region=eu (bound) · resource=UNKNOWN (deferred → residual)");
     let mut produced_residual = false;
-    for residual in response.nontrivial_residuals() {
+    for residual in response.nontrivial_residual_policies() {
         produced_residual = true;
-        let filter_type = residual.annotation("filter_type").unwrap_or("<none>");
+        let effect = format!("{:?}", residual.effect());
         match translator.to_predicate(&residual) {
             Ok(Some(expr)) => {
-                println!("  residual @filter_type({filter_type}) → DataFusion Expr: {expr}");
+                println!("  {effect} residual → DataFusion row filter Expr: {expr}");
                 println!("    (this Expr is injected as a Filter/Projection before optimize;");
                 println!("     it is also the artifact a 'carry-residual' design (ADR option B)");
                 println!(
                     "     would cache in the session store keyed by (correlation_id, bundle_version))"
                 );
             }
-            Ok(None) => {
-                println!("  residual @filter_type({filter_type}) → trivially true (no filter)")
-            }
+            Ok(None) => println!("  {effect} residual → trivially true (no filter)"),
             Err(e) => println!("  residual untranslatable → fail closed (deny rows): {e}"),
         }
     }
@@ -446,12 +468,14 @@ async fn main() {
 
     divider("④ Agent-tool PEP — may the agent call send_external now?");
     let observed = facts.observed_taints(correlation_id);
-    let req = RequestBuilder::default()
-        .principal(alice_uid.clone())
-        .action(action("send_external"))
-        .resource(table_resource("export_sink"))
-        .context(tool_context(&observed))
-        .build();
+    let req = Request::new(
+        alice_uid.clone(),
+        action("send_external"),
+        tool_resource("send_external"),
+        tool_context(&observed),
+        None,
+    )
+    .expect("request");
     let decision = guardrail
         .is_authorized(&req, &entities)
         .await
@@ -464,12 +488,14 @@ async fn main() {
     // the decision is driven by the accrued fact, not hardcoded.
     divider("④ Agent-tool PEP (counterfactual) — fresh session, no taints");
     let clean = BTreeSet::new();
-    let req = RequestBuilder::default()
-        .principal(alice_uid.clone())
-        .action(action("send_external"))
-        .resource(table_resource("export_sink"))
-        .context(tool_context(&clean))
-        .build();
+    let req = Request::new(
+        alice_uid.clone(),
+        action("send_external"),
+        tool_resource("send_external"),
+        tool_context(&clean),
+        None,
+    )
+    .expect("request");
     let decision = guardrail
         .is_authorized(&req, &entities)
         .await

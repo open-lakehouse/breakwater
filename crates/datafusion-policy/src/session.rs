@@ -51,6 +51,13 @@ pub struct CatalogFactSinkExt(pub CatalogFactSink);
 #[derive(Clone)]
 pub struct FactStoreExt(pub Arc<dyn crate::FactStore>);
 
+/// The `SessionConfig` extension carrying the catalog function resolver, so the
+/// governance PEP can turn a policy-referenced masking / row-filter function name
+/// into a callable [`ScalarUDF`](datafusion::logical_expr::ScalarUDF).
+#[cfg(feature = "fgac")]
+#[derive(Clone)]
+pub struct FunctionResolverExt(pub Arc<dyn crate::CatalogFunctionResolver>);
+
 /// Resolves the principal a query runs as, from a [`SessionState`].
 ///
 /// Mirrors `datafusion_openlineage`'s `LineageContextProvider`: the provider
@@ -113,6 +120,10 @@ impl EvalContextProvider for SessionConfigEvalContextProvider {
                 fact_store: state
                     .config()
                     .get_extension::<FactStoreExt>()
+                    .map(|ext| ext.0.clone()),
+                function_resolver: state
+                    .config()
+                    .get_extension::<FunctionResolverExt>()
                     .map(|ext| ext.0.clone()),
             }
         }
