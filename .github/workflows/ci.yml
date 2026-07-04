@@ -21,38 +21,6 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Detect whether a PR touches anything that affects the build. A docs-only
-  # change can't break compilation, so the expensive jobs gate on this. On push
-  # to main / merge_group there is no PR diff to filter, so `code` is 'true'.
-  changes:
-    name: detect changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-      proto: ${{ steps.filter.outputs.proto }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
-        id: filter
-        with:
-          filters: |
-            code:
-              - '!**/*.md'
-              - '!docs/**'
-              - '!LICENSE'
-              - '!.gitignore'
-            proto:
-              - 'proto/**'
-              - 'buf.yaml'
-              - 'crates/cedar-oci/buf.gen.yaml'
-              - 'crates/cedar-oci/src/gen/**'
-
   fmt:
     name: fmt
     runs-on: ubuntu-latest
@@ -115,8 +83,6 @@ jobs:
   # rust-version). The other jobs run on a recent pinned stable.
   msrv:
     name: msrv
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -145,8 +111,6 @@ jobs:
   # the committed output drifts from the .proto sources.
   proto-check:
     name: proto-check
-    needs: changes
-    if: ${{ needs.changes.outputs.proto == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -180,8 +144,6 @@ jobs:
 
   test:
     name: test
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -214,8 +176,6 @@ jobs:
   # docs.rs builds these crates; keep the doc build warning-free.
   doc:
     name: doc
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -241,8 +201,7 @@ jobs:
       - name: Doc
         run: cargo doc --no-deps --workspace --all-features
 
-  # Single roll-up status. Because some jobs are conditionally skipped on
-  # docs-only PRs, make THIS the one required check in branch protection.
+  # Single roll-up status. Make THIS the one required check in branch protection.
   ci:
     name: ci
     if: ${{ always() }}
@@ -251,7 +210,7 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Verify required jobs succeeded or were skipped
+      - name: Verify required jobs succeeded
         run: |
           for r in \
             "fmt:${{ needs.fmt.result }}" \
@@ -263,9 +222,9 @@ jobs:
             "doc:${{ needs.doc.result }}"; do
             name="${r%%:*}"; result="${r##*:}"
             echo "$name -> $result"
-            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+            if [ "$result" != "success" ]; then
               echo "::error::required job '$name' did not succeed ($result)"
               exit 1
             fi
           done
-          echo "All required jobs passed (or were skipped)."
+          echo "All required jobs passed."
