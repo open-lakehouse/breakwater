@@ -7,10 +7,9 @@ name: Release-plz
 # (olai-datafusion-policy / olai-cedar-oci before olai-datafusion-policy-cedar) over
 # OIDC — no registry token.
 #
-# A crate only publishes once its `release = false` gate is removed in
-# release-plz.toml (i.e. after its one-time bootstrap + Trusted Publisher
-# registration; see bootstrap-publish.yml). See release-plz.toml and
-# CONTRIBUTING.md for the full flow.
+# All three crates are bootstrapped and publish over OIDC. A *new* publishable
+# crate needs a one-time token bootstrap + Trusted Publisher registration before
+# it can release this way. See release-plz.toml and CONTRIBUTING.md for the flow.
 
 on:
   push:
