@@ -17,20 +17,19 @@
 # the short names (crates/cedar-oci, …). This matters here because:
 #   * `[[package]] name` below and `{{ package }}` in tag/release templates key
 #     off the *package* name, so they use the `olai-` names.
-#   * Per-crate CHANGELOG.md still lands in the crate's *folder* (release-plz
-#     keys the changelog path off the Cargo.toml directory, not the package
-#     name), so no `changelog_path` override is needed — changelogs stay at
-#     crates/<short-name>/CHANGELOG.md.
+#   * Per-crate CHANGELOG.md must land in the crate's *folder*
+#     (crates/<short-name>/), but release-plz derives the default changelog path
+#     from the *package* name, which here is the `olai-` name — a folder that
+#     doesn't exist. Each `[[package]]` block below therefore pins an explicit
+#     `changelog_path` to the real short-name folder.
 #   * Commit scopes (feat(cedar-oci): …) still use the short names, so the
 #     changelog scope-stripping preprocessor below is unchanged.
 #
-# FIRST-PUBLISH BOOTSTRAP: crates.io OIDC trusted publishing (what the release
-# job uses) cannot create a crate name that has never existed. Each crate below
-# therefore carries `release = false` until it has been bootstrap-published once
-# with a token (see .github/workflows/bootstrap-publish.yml) and its Trusted
-# Publisher is registered on crates.io. Drop the `release = false` for a crate
-# the moment its OIDC publisher is live; delete the bootstrap workflow + revoke
-# the token once all three crates are on OIDC.
+# All three crates were bootstrap-published once with a token and now release via
+# crates.io OIDC trusted publishing (see the `release-plz.yml` job). A *new*
+# publishable crate added later would need the same one-time bootstrap: publish
+# it once with a token, register its Trusted Publisher on crates.io, then it
+# joins OIDC — see CONTRIBUTING.md ("crates.io authentication").
 #
 # Config reference: https://release-plz.dev/docs/config
 
@@ -66,22 +65,23 @@ pr_labels = ["release"]
 pr_draft = false
 
 # ---------------------------------------------------------------------------
-# Per-package overrides — bootstrap gating.
-# Remove each `release = false` once that crate's Trusted Publisher is
-# registered on crates.io (see the header). Until then release-plz still
-# versions/changelogs/tags the crate; it just doesn't `cargo publish` it.
+# Per-package overrides. All three crates default to publish=true + tag +
+# release. These blocks only pin the changelog path: the published `olai-` names
+# don't match the on-disk folders, and release-plz derives the default changelog
+# path from the package name, so without these it would try to write to
+# crates/olai-*/CHANGELOG.md (nonexistent). Point each at its real folder.
 # ---------------------------------------------------------------------------
 [[package]]
 name = "olai-datafusion-policy"
-release = false
+changelog_path = "crates/datafusion-policy/CHANGELOG.md"
 
 [[package]]
 name = "olai-cedar-oci"
-release = false
+changelog_path = "crates/cedar-oci/CHANGELOG.md"
 
 [[package]]
 name = "olai-datafusion-policy-cedar"
-release = false
+changelog_path = "crates/datafusion-policy-cedar/CHANGELOG.md"
 
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.

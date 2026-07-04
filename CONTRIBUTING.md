@@ -62,31 +62,28 @@ sources.
 - **Releases are automated.** Don't bump crate versions or edit `CHANGELOG.md`
   by hand — release-plz maintains both from the merged commit history.
 
-## crates.io authentication (OIDC trusted publishing + first-publish bootstrap)
+## crates.io authentication (OIDC trusted publishing)
 
-Steady-state releases authenticate to crates.io via **Trusted Publishing
+All published crates authenticate to crates.io via **Trusted Publishing
 (OIDC)** — the `release-plz.yml` release job runs with `id-token: write` in the
-protected `release` environment and needs **no** registry token.
+protected `release` environment and needs **no** registry token. All three
+crates are bootstrapped and live on OIDC; nothing extra is required to cut a
+release.
 
-**A brand-new crate needs a one-time bootstrap first publish.** OIDC cannot
-create a crate name that has never existed (there is no crate to attach a
-Trusted Publisher policy to), and a corporate proxy blocks publishing from local
-machines — so the first publish runs from CI with a token:
+**Adding a brand-new publishable crate** needs a one-time bootstrap first
+publish, because OIDC cannot create a crate name that has never existed (there
+is no crate to attach a Trusted Publisher policy to) and a corporate proxy
+blocks publishing from local machines. To onboard a new crate:
 
-1. A maintainer creates the `release` GitHub Environment and stores a crates.io
-   token (publish-new scope) as its `CARGO_REGISTRY_TOKEN` secret.
-2. Run the **Bootstrap publish** workflow
-   (`.github/workflows/bootstrap-publish.yml`, `workflow_dispatch`) in
-   dependency order — `cedar-oci` first, then `datafusion-policy-cedar`. Trigger it with
-   `dry_run` on first to confirm the package is publishable, then re-run with
-   `dry_run` off to create the crate. (`datafusion-policy-cedar`'s dry-run only resolves
-   once `cedar-oci` is live on crates.io.)
+1. Ensure the `release` GitHub Environment holds a crates.io token
+   (publish-new scope) as its `CARGO_REGISTRY_TOKEN` secret.
+2. From CI (or, if the proxy allows, locally) run one token-authenticated
+   `cargo publish -p <crate> --locked` to create the crate name. Publish in
+   dependency order if the new crate depends on other not-yet-published crates.
 3. On crates.io, register the Trusted Publisher for the new crate (repo
    `open-lakehouse/breakwater`, workflow `release-plz.yml`, environment
-   `release`), then drop that crate's `release = false` in `release-plz.toml`.
-4. Once both crates are live on OIDC, delete the bootstrap workflow and revoke
-   the token. Any *new* publishable crate added later needs the same one-time
-   bootstrap.
+   `release`). Once its Trusted Publisher is live, release-plz publishes it via
+   OIDC on every subsequent release.
 
 ## License
 
