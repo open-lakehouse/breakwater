@@ -16,9 +16,9 @@ rust-version = "1.91"
 # `package = "olai-…"` alias means the *published* crate is renamed but every
 # dependent (and all Rust `use` paths) keep referring to it by the short name —
 # so `use cedar_oci::…` etc. stay unchanged.
-cedar-oci = { package = "olai-cedar-oci", version = "0.0.1", path = "crates/cedar-oci" }
-datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.1", path = "crates/datafusion-policy-cedar" }
-datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.1", path = "crates/datafusion-policy" }
+cedar-oci = { package = "olai-cedar-oci", version = "0.0.2", path = "crates/cedar-oci" }
+datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.2", path = "crates/datafusion-policy-cedar" }
+datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.2", path = "crates/datafusion-policy" }
 
 async-trait = { version = "^0.1.89" }
 cedar-local-agent = "3.0.0"
