@@ -1,5 +1,5 @@
 [package]
-name = "cedar-oci"
+name = "olai-cedar-oci"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Cedar policy provider backed by OCI-distributed policy bundles, with generated hydrofoil.policy gRPC types"
 repository = "https://github.com/open-lakehouse/breakwater"
 homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/cedar-oci"
-documentation = "https://docs.rs/cedar-oci"
+documentation = "https://docs.rs/olai-cedar-oci"
 readme = "README.md"
 keywords = ["cedar", "authorization", "oci", "policy"]
 categories = ["authentication", "api-bindings"]

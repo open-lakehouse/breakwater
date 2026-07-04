@@ -10,9 +10,15 @@ rust-version = "1.91"
 [workspace.dependencies]
 # Intra-workspace crates: version + path so release-plz publishes to crates.io
 # (version) while local builds resolve against the path.
-cedar-oci = { version = "0.0.1", path = "crates/cedar-oci" }
-datafusion-cedar = { version = "0.0.1", path = "crates/datafusion-cedar" }
-datafusion-policy = { version = "0.0.1", path = "crates/datafusion-policy" }
+#
+# The published artifacts carry an `olai-` prefix (open lakehouse and ai) while
+# we incubate under names we can rename once community consensus is reached. The
+# `package = "olai-…"` alias means the *published* crate is renamed but every
+# dependent (and all Rust `use` paths) keep referring to it by the short name —
+# so `use cedar_oci::…` etc. stay unchanged.
+cedar-oci = { package = "olai-cedar-oci", version = "0.0.1", path = "crates/cedar-oci" }
+datafusion-cedar = { package = "olai-datafusion-cedar", version = "0.0.1", path = "crates/datafusion-cedar" }
+datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.1", path = "crates/datafusion-policy" }
 
 async-trait = { version = "^0.1.89" }
 cedar-local-agent = "3.0.0"
