@@ -71,7 +71,7 @@ fn table_entity(table_ref: &TableReference, facts: &TableFacts) -> Option<Entity
     Entity::new(table_resource_uid(table_ref), attrs, Default::default()).ok()
 }
 
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 use {
     crate::translate::CedarResidualTranslator,
     cedar_policy::{EntityTypeName, Request, RequestBuilder},
@@ -181,7 +181,7 @@ where
         Ok(Decision::Allow)
     }
 
-    #[cfg(feature = "governance")]
+    #[cfg(feature = "fgac")]
     async fn constrain(
         &self,
         table: &TableReference,
@@ -288,7 +288,7 @@ where
         Ok(tp)
     }
 
-    #[cfg(feature = "governance")]
+    #[cfg(feature = "fgac")]
     async fn tool_policy(
         &self,
         action: &str,
@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(decision, Decision::Allow);
     }
 
-    #[cfg(feature = "governance")]
+    #[cfg(feature = "fgac")]
     mod governance {
         use super::*;
         use datafusion::common::DFSchema;

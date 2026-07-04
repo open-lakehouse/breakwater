@@ -14,7 +14,7 @@
 //! provider traits — so the crate never depends on host types. The default
 //! providers ([`SessionConfigPrincipalProvider`], [`SessionConfigEvalContextProvider`])
 //! read the extension newtypes this crate owns ([`PrincipalExt`],
-//! [`CatalogFactSinkExt`], and — under `governance` — [`FactStoreExt`]); the host
+//! [`CatalogFactSinkExt`], and — under `fgac` — [`FactStoreExt`]); the host
 //! populates them.
 
 use std::sync::Arc;
@@ -47,7 +47,7 @@ pub struct CatalogFactSinkExt(pub CatalogFactSink);
 
 /// The `SessionConfig` extension carrying the session's taint ledger, attached
 /// to the per-query state so the policy layer can build the [`EvalContext`].
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 #[derive(Clone)]
 pub struct FactStoreExt(pub Arc<dyn crate::FactStore>);
 
@@ -65,7 +65,7 @@ pub trait PrincipalProvider: std::fmt::Debug + Send + Sync {
 /// Assembles the per-query [`EvalContext`] from a [`SessionState`].
 ///
 /// The policy layer needs the catalog facts, the correlation id, and (under
-/// `governance`) the taint ledger — none of which live on the plan. This trait
+/// `fgac`) the taint ledger — none of which live on the plan. This trait
 /// is the seam that gathers them; the default
 /// [`SessionConfigEvalContextProvider`] reads them from `SessionConfig`
 /// extensions the host attached.
@@ -91,7 +91,7 @@ impl PrincipalProvider for SessionConfigPrincipalProvider {
 
 /// An [`EvalContextProvider`] that assembles the [`EvalContext`] from the
 /// session's `SessionConfig` extensions: the catalog fact sink and (under
-/// `governance`) the correlation id + taint ledger. The correlation id is the
+/// `fgac`) the correlation id + taint ledger. The correlation id is the
 /// session id, stable per connection.
 #[derive(Debug, Default)]
 pub struct SessionConfigEvalContextProvider;
@@ -105,7 +105,7 @@ impl EvalContextProvider for SessionConfigEvalContextProvider {
             .map(|ext| ext.0.clone())
             .unwrap_or_default();
 
-        #[cfg(feature = "governance")]
+        #[cfg(feature = "fgac")]
         {
             EvalContext {
                 catalog_facts,
@@ -116,7 +116,7 @@ impl EvalContextProvider for SessionConfigEvalContextProvider {
                     .map(|ext| ext.0.clone()),
             }
         }
-        #[cfg(not(feature = "governance"))]
+        #[cfg(not(feature = "fgac"))]
         {
             EvalContext {
                 catalog_facts,
@@ -129,10 +129,10 @@ impl EvalContextProvider for SessionConfigEvalContextProvider {
 /// Inject fine-grained governance (row filters + column masks) into a plan
 /// before optimization.
 ///
-/// With the `governance` feature this delegates to [`crate::govern::govern_plan`];
+/// With the `fgac` feature this delegates to [`crate::govern::govern_plan`];
 /// without it (the default), it is a no-op that returns the plan unchanged — the
 /// coarse access gate still applies.
-#[cfg(feature = "governance")]
+#[cfg(feature = "fgac")]
 async fn govern_plan(
     plan: &LogicalPlan,
     policy: &dyn PolicyEngine,
@@ -142,7 +142,7 @@ async fn govern_plan(
     crate::govern::govern_plan(plan, policy, principal, eval).await
 }
 
-#[cfg(not(feature = "governance"))]
+#[cfg(not(feature = "fgac"))]
 async fn govern_plan(
     plan: &LogicalPlan,
     _policy: &dyn PolicyEngine,
