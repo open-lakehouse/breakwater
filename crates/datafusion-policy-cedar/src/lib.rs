@@ -42,8 +42,9 @@ pub use datafusion_policy::{
 
 #[cfg(feature = "fgac")]
 pub use datafusion_policy::{
-    CatalogFunctionResolver, FactStore, FactStoreExt, FunctionResolverExt, InMemoryFactStore,
-    TablePolicy, govern_plan,
+    AbacPolicyEngine, BindingKind, CatalogFunctionResolver, ColumnMatch, DefaultPrincipalMatcher,
+    FactStore, FactStoreExt, FunctionArg, FunctionResolverExt, InMemoryFactStore, PolicyBinding,
+    PrincipalMatcher, TablePolicy, TagCondition, govern_plan,
 };
 #[cfg(feature = "fgac")]
 pub use translate::CedarResidualTranslator;
