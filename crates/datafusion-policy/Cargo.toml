@@ -20,10 +20,10 @@ datafusion-common = { workspace = true }
 thiserror = { workspace = true }
 
 [features]
-default = []
+default = ["fgac"]
 # Layer 2 fine-grained access control (row filters + column masks) + the
-# agent-tool PEP. Off by default; the Cedar (or any) adapter's own `fgac`
-# feature enables this one.
+# agent-tool PEP. On by default; opt out with `default-features = false` for a
+# coarse-gate-only build.
 fgac = []
 
 [dev-dependencies]

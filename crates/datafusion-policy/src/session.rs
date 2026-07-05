@@ -45,6 +45,15 @@ pub struct PrincipalExt(pub PrincipalIdentity);
 #[derive(Debug, Clone, Default)]
 pub struct CatalogFactSinkExt(pub CatalogFactSink);
 
+/// The `SessionConfig` extension carrying the session's [`PolicyEngine`], so
+/// the engine is discoverable from config on every host regardless of which
+/// enforcement tier fires first: [`PolicyBuilder::instrument`] sets it, and
+/// the provider-tier seam
+/// (`govern_provider_from_config`, under `fgac`) reads it back at
+/// table-resolution time.
+#[derive(Debug, Clone)]
+pub struct PolicyEngineExt(pub Arc<dyn PolicyEngine>);
+
 /// The `SessionConfig` extension carrying the session's taint ledger, attached
 /// to the per-query state so the policy layer can build the [`EvalContext`].
 #[cfg(feature = "fgac")]
@@ -272,10 +281,18 @@ impl PolicyBuilder {
             .unwrap_or_else(|| Arc::new(SessionConfigEvalContextProvider));
 
         let inner: Arc<dyn QueryPlanner + Send + Sync> = state.query_planner().clone();
-        let planner = Arc::new(PolicyQueryPlanner::new(policy, principal, eval, inner));
+        let planner = Arc::new(PolicyQueryPlanner::new(
+            policy.clone(),
+            principal,
+            eval,
+            inner,
+        ));
 
         let mut session_config = state.config().clone();
         session_config.set_extension(planner.clone());
+        // Make the engine discoverable from config (PolicyEngineExt) so the
+        // provider-tier seam can reach it at table-resolution time.
+        session_config.set_extension(Arc::new(PolicyEngineExt(policy)));
         SessionStateBuilder::from(state)
             .with_config(session_config)
             .with_query_planner(planner)

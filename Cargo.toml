@@ -18,7 +18,10 @@ rust-version = "1.91"
 # so `use cedar_oci::…` etc. stay unchanged.
 cedar-oci = { package = "olai-cedar-oci", version = "0.0.2", path = "crates/cedar-oci" }
 datafusion-policy-cedar = { package = "olai-datafusion-policy-cedar", version = "0.0.2", path = "crates/datafusion-policy-cedar" }
-datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.2", path = "crates/datafusion-policy" }
+# default-features = false so the cedar adapter's own `fgac` feature remains the
+# sole gate for the neutral core's `fgac` (both crates default it on for users;
+# a `--no-default-features` build of either must stay a real opt-out).
+datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.2", path = "crates/datafusion-policy", default-features = false }
 
 async-trait = { version = "^0.1.89" }
 cedar-local-agent = "3.0.0"

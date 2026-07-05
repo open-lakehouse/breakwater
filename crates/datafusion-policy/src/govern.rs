@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use datafusion::common::tree_node::{
     Transformed, TreeNode as _, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
-use datafusion::common::{Column, Result};
+use datafusion::common::{Column, DFSchema, Result};
+use datafusion::logical_expr::expr_fn::cast;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
@@ -96,6 +97,13 @@ pub async fn govern_plan(
         if policies.contains_key(&table) {
             continue;
         }
+        // A table marked governed was already secured at provider-resolution
+        // time (the secured-view tier); skipping it here is what keeps the two
+        // enforcement tiers mutually exclusive per (table, query) — nothing is
+        // double-masked. Taints were still recorded above.
+        if eval.catalog_facts.is_governed(&table) {
+            continue;
+        }
         let tp = policy
             .constrain(&table, schema.as_ref(), principal, eval)
             .await?;
@@ -135,6 +143,51 @@ fn record_taints(
     }
 }
 
+/// Apply one table's enforcement to the plan node reading it, producing the
+/// canonical `Filter(row_filters AND-reduced, Projection(masks, plan))` shape.
+///
+/// This is the single enforcement shape shared by both placements: the
+/// planner-tier rewrite ([`govern_plan`]) hands in the `TableScan` it visits,
+/// and the provider-tier secured view hands in a scan built over the base
+/// provider. `schema` is the plan node's (projected) schema — the columns the
+/// projection must reproduce.
+pub(crate) fn apply_table_policy(
+    plan: LogicalPlan,
+    schema: &DFSchema,
+    policy: &TablePolicy,
+) -> Result<LogicalPlan> {
+    let mut builder = LogicalPlanBuilder::from(plan);
+
+    // Column masks: rebuild the projection, replacing masked columns with
+    // their mask expression and passing the rest through unchanged. A masked
+    // column must preserve the original *qualified* column identity (e.g.
+    // `t.ssn`) so downstream nodes that reference the qualified column still
+    // resolve, and the original `DataType` (via the CAST) so DESCRIBE /
+    // information_schema stay indistinguishable from the base table.
+    if !policy.column_masks.is_empty() {
+        let projections: Vec<Expr> = schema
+            .iter()
+            .map(|(qualifier, field)| {
+                let name = field.name();
+                match policy.column_masks.get(name) {
+                    Some(mask) => cast(mask.clone(), field.data_type().clone())
+                        .alias_qualified(qualifier.cloned(), name),
+                    None => Expr::Column(Column::new(qualifier.cloned(), name)),
+                }
+            })
+            .collect();
+        builder = builder.project(projections)?;
+    }
+
+    // Row filters: AND them together into one filter above the (possibly
+    // masked) scan.
+    if let Some(predicate) = policy.row_filters.iter().cloned().reduce(Expr::and) {
+        builder = builder.filter(predicate)?;
+    }
+
+    builder.build()
+}
+
 /// The sync rewriter that wraps each governed `TableScan` in a mask projection
 /// and a row filter.
 struct GovernRewriter {
@@ -153,33 +206,7 @@ impl TreeNodeRewriter for GovernRewriter {
         };
 
         let schema = scan.projected_schema.clone();
-        let mut builder = LogicalPlanBuilder::from(node.clone());
-
-        // Column masks: rebuild the projection, replacing masked columns with
-        // their mask expression and passing the rest through unchanged. Both
-        // must preserve the original *qualified* column identity (e.g. `t.ssn`)
-        // so downstream nodes that reference the qualified column still resolve.
-        if !tp.column_masks.is_empty() {
-            let projections: Vec<Expr> = schema
-                .iter()
-                .map(|(qualifier, field)| {
-                    let name = field.name();
-                    match tp.column_masks.get(name) {
-                        Some(mask) => mask.clone().alias_qualified(qualifier.cloned(), name),
-                        None => Expr::Column(Column::new(qualifier.cloned(), name)),
-                    }
-                })
-                .collect();
-            builder = builder.project(projections)?;
-        }
-
-        // Row filters: AND them together into one filter above the (possibly
-        // masked) scan.
-        if let Some(predicate) = tp.row_filters.iter().cloned().reduce(Expr::and) {
-            builder = builder.filter(predicate)?;
-        }
-
-        Ok(Transformed::yes(builder.build()?))
+        Ok(Transformed::yes(apply_table_policy(node, &schema, tp)?))
     }
 }
 
@@ -376,6 +403,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mask_preserves_column_name_and_data_type() {
+        // Mask an Int64 column with an Int32 literal: the CAST added by
+        // `apply_table_policy` must restore the original DataType so the
+        // governed schema is indistinguishable from the base table.
+        let mut masks = HashMap::new();
+        masks.insert("id".to_string(), lit(0i32));
+        let policy = FixedPolicy(TablePolicy {
+            row_filters: vec![],
+            column_masks: masks,
+        });
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
+        let field = governed
+            .schema()
+            .field_with_unqualified_name("id")
+            .expect("masked column keeps its name");
+        assert_eq!(
+            field.data_type(),
+            &DataType::Int64,
+            "masked column must keep the original DataType"
+        );
+    }
+
+    #[tokio::test]
     async fn deny_override_keeps_negated_condition() {
         // deny_override is modeled upstream as NOT(condition) in the row
         // filters; verify a NOT filter survives into the governed plan.
@@ -484,6 +536,90 @@ mod tests {
         );
         // The injected predicate filters on `a.region`.
         assert!(rendered.contains(r#"name: "region""#));
+    }
+
+    /// A table marked governed (secured at provider-resolution time) gets no
+    /// second filter/mask from `govern_plan`, while an unmarked table in the
+    /// same plan is still constrained — and taints are recorded for *both*.
+    #[tokio::test]
+    async fn marked_governed_table_skipped_but_taints_still_recorded() {
+        use crate::FactStore as _;
+        use datafusion::logical_expr::JoinType;
+
+        // Facts: a.ssn is pii-tagged, b.ssn is secret-tagged; `a` is marked as
+        // already governed by the provider tier.
+        let sink = crate::CatalogFactSink::new();
+        for (name, tag) in [("a", "pii"), ("b", "secret")] {
+            sink.record(
+                TableReference::bare(name),
+                crate::TableFacts {
+                    column_tags: HashMap::from([(
+                        "ssn".to_string(),
+                        [tag.to_string()].into_iter().collect(),
+                    )]),
+                    ..Default::default()
+                },
+            );
+        }
+        sink.mark_governed(TableReference::bare("a"));
+        let store = std::sync::Arc::new(crate::InMemoryFactStore::new());
+        let eval = EvalContext {
+            catalog_facts: sink,
+            correlation_id: Some("session-1".to_string()),
+            fact_store: Some(store.clone()),
+            function_resolver: None,
+        };
+
+        // Distinguishable per-table filters so we can tell whose was injected.
+        let mut by_table = HashMap::new();
+        for (name, marker) in [("a", "marker-a"), ("b", "marker-b")] {
+            by_table.insert(
+                name.to_string(),
+                TablePolicy {
+                    row_filters: vec![col("region").eq(lit(marker))],
+                    column_masks: Default::default(),
+                },
+            );
+        }
+        let policy = PerTablePolicy {
+            by_table,
+            err: false,
+        };
+
+        let a = table_scan(Some("a"), &schema_3(), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let b = table_scan(Some("b"), &schema_3(), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(a)
+            .join(b, JoinType::Inner, (vec!["a.id"], vec!["b.id"]), None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let governed = govern_plan(&plan, &policy, &principal(), &eval)
+            .await
+            .unwrap();
+        let rendered = format!("{governed:?}");
+        // Only `b`'s filter was injected; marked `a` is untouched.
+        assert!(
+            rendered.contains("marker-b"),
+            "unmarked table must still be constrained: {rendered}"
+        );
+        assert!(
+            !rendered.contains("marker-a"),
+            "marked table must not be constrained again: {rendered}"
+        );
+        // Taints accrued for both tables regardless of the marker.
+        assert_eq!(
+            store.observed_taints("session-1"),
+            ["pii".to_string(), "secret".to_string()]
+                .into_iter()
+                .collect()
+        );
     }
 
     /// A policy-resolution error propagates out of `govern_plan` (fail-closed:
