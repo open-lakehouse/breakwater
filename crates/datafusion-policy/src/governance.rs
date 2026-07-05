@@ -89,7 +89,9 @@ impl Posture {
 /// identity / function / fact-store providers, and the runtime [`Posture`].
 ///
 /// Built once per server via [`Governance::builder`]; cheap to clone (`Arc`s
-/// inside). See the [module docs](self) for the per-session recipe.
+/// inside). See [`bind_principal`](Self::bind_principal) /
+/// [`attach`](Self::attach) / [`instrument`](Self::instrument) for the
+/// per-session recipe.
 #[derive(Debug, Clone)]
 pub struct Governance {
     posture: Posture,
