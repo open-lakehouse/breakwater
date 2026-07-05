@@ -50,6 +50,13 @@ pub struct TableFacts {
     /// per-column analog of [`governed_tags`](Self::governed_tags); column tags
     /// are applied directly (UC semantics: they do not inherit from the table).
     pub governed_column_tags: HashMap<String, BTreeMap<String, String>>,
+    /// The **already-inheritance-folded** UC ABAC policy bindings applying to
+    /// this table (the catalog → schema → table union is the host's/UC-server's
+    /// job, not the engine's). Consumed by the
+    /// [`AbacPolicyEngine`](crate::AbacPolicyEngine) to produce row filters and
+    /// column masks. Behind `fgac`, alongside the engine that reads them.
+    #[cfg(feature = "fgac")]
+    pub policies: Vec<crate::binding::PolicyBinding>,
 }
 
 impl TableFacts {
@@ -62,6 +69,20 @@ impl TableFacts {
             && self.column_tags.is_empty()
             && self.governed_tags.is_empty()
             && self.governed_column_tags.is_empty()
+            && self.policies_is_empty()
+    }
+
+    /// Whether the `fgac`-gated policy bindings are empty. A separate helper so
+    /// [`is_empty`](Self::is_empty) stays feature-agnostic (no bindings exist to
+    /// carry without `fgac`, so it is vacuously empty then).
+    #[cfg(feature = "fgac")]
+    fn policies_is_empty(&self) -> bool {
+        self.policies.is_empty()
+    }
+
+    #[cfg(not(feature = "fgac"))]
+    fn policies_is_empty(&self) -> bool {
+        true
     }
 
     /// The union of the classification tags of any column in `accessed` — the
@@ -241,6 +262,29 @@ mod tests {
         assert!(
             !TableFacts {
                 tags: tags(&["pii"]),
+                ..Default::default()
+            }
+            .is_empty()
+        );
+    }
+
+    #[cfg(feature = "fgac")]
+    #[test]
+    fn is_empty_reflects_policy_bindings() {
+        use crate::binding::{BindingKind, PolicyBinding};
+        // A table carrying only a policy binding is non-empty.
+        assert!(
+            !TableFacts {
+                policies: vec![PolicyBinding {
+                    name: "p".into(),
+                    kind: BindingKind::RowFilter,
+                    to_principals: vec![],
+                    except_principals: vec![],
+                    when_condition: vec![],
+                    match_columns: vec![],
+                    function: "f".into(),
+                    using_args: vec![],
+                }],
                 ..Default::default()
             }
             .is_empty()
