@@ -1,9 +1,11 @@
 //! Translate a Cedar residual (the leftover condition from type-aware partial
 //! evaluation) into a DataFusion [`Expr`].
 //!
-//! After TPE with a concrete principal/action/context and an *unknown* resource,
-//! a surviving residual's condition references only `resource.<attr>`. We map
-//! `resource.<attr>` to `col(<attr>)` and Cedar operators to DataFusion
+//! After TPE with a concrete principal/action/context and a resource left
+//! symbolic in its attributes, a surviving residual's condition references only
+//! the resource's attributes (`resource.<attr>`, or `<Table uid>.<attr>` when the
+//! resource uid was pinned concrete to fold its tags). We map those attribute
+//! accesses to `col(<attr>)` and Cedar operators to DataFusion
 //! expression operators. The grammar is deliberately restricted (equality,
 //! comparison, boolean combinators, `like`); anything outside it fails — and the
 //! caller treats a failure as fail-closed (deny the row / mask the column).
@@ -22,6 +24,8 @@ use datafusion::logical_expr::{Expr, col, lit};
 use cedar_policy::Policy;
 use cedar_policy::pst::{self, BinaryOp, Clause, Literal, PatternElem, UnaryOp, Var};
 
+use cedar_oci::EntityUid;
+
 use datafusion_policy::ConstraintTranslator;
 
 /// Reads a Cedar residual's typed PST and lowers its condition to an [`Expr`].
@@ -31,8 +35,37 @@ use datafusion_policy::ConstraintTranslator;
 /// `Residual` is a `cedar_policy::Policy`. A future translator for a different
 /// engine's residual would implement the same trait with a different `Residual`
 /// type, without touching the enforcement layer.
+///
+/// The residual's `resource` base can appear two ways depending on how the TPE
+/// request modeled the resource:
+///
+/// - as the symbolic `resource` var / an `Unknown` node — when the resource uid
+///   was left unknown (`resource.<attr>` in the source PST); or
+/// - as a concrete **entity-uid literal** — when the TPE request pinned the
+///   resource to a concrete uid (so its tags could fold) while leaving its
+///   attributes unknown. `read_table` now does this to fold table governed tags,
+///   so `resource.region` surfaces as `Table::"…".region`.
+///
+/// [`with_resource_uid`](Self::with_resource_uid) records the concrete uid so
+/// the second form is recognized as a column reference; a bare [`Default`]
+/// translator (no uid) recognizes only the symbolic form.
 #[derive(Debug, Default)]
-pub struct CedarResidualTranslator;
+pub struct CedarResidualTranslator {
+    /// The concrete resource uid the residual was evaluated against, when the
+    /// TPE request used one. `None` for the unknown-resource path.
+    resource_uid: Option<EntityUid>,
+}
+
+impl CedarResidualTranslator {
+    /// A translator that also recognizes `<resource_uid>.<attr>` (a concrete
+    /// resource entity literal) as a column reference, alongside the symbolic
+    /// `resource.<attr>` form.
+    pub fn with_resource_uid(resource_uid: EntityUid) -> Self {
+        Self {
+            resource_uid: Some(resource_uid),
+        }
+    }
+}
 
 impl ConstraintTranslator for CedarResidualTranslator {
     type Residual = Policy;
@@ -61,7 +94,7 @@ impl ConstraintTranslator for CedarResidualTranslator {
                 }
                 continue;
             }
-            let mut expr = translate_expr(raw)?;
+            let mut expr = self.translate_expr(raw)?;
             if negate {
                 expr = !expr;
             }
@@ -79,107 +112,123 @@ fn is_true_literal(node: &pst::Expr) -> bool {
     matches!(node, pst::Expr::Literal(Literal::Bool(true)))
 }
 
-/// Translate one PST expression node into a DataFusion [`Expr`].
-fn translate_expr(node: &pst::Expr) -> Result<Expr> {
-    match node {
-        pst::Expr::Literal(lit_val) => translate_literal(lit_val),
+impl CedarResidualTranslator {
+    /// Translate one PST expression node into a DataFusion [`Expr`].
+    fn translate_expr(&self, node: &pst::Expr) -> Result<Expr> {
+        match node {
+            pst::Expr::Literal(lit_val) => translate_literal(lit_val),
 
-        pst::Expr::GetAttr { expr, attr } => {
-            if base_is_resource(expr) {
-                Ok(col(attr.as_str()))
-            } else {
-                // principal.* should have been folded out by TPE; any remaining
-                // non-resource attribute access is not a column reference.
-                Err(plan_datafusion_err!(
-                    "residual references a non-resource attribute '{attr}'; not a column"
-                ))
-            }
-        }
-
-        pst::Expr::UnaryOp { op, expr } => match op {
-            UnaryOp::Not => Ok(!translate_expr(expr)?),
-            other => Err(plan_datafusion_err!(
-                "unsupported Cedar unary operator in residual: {other:?}"
-            )),
-        },
-
-        pst::Expr::BinaryOp { op, left, right } => translate_binary(op, left, right),
-
-        pst::Expr::Like { expr, pattern } => translate_like(expr, pattern),
-
-        // A surviving `resource`/`unknown` base outside a `.` access, a set/record
-        // literal, `if`/`is`/slots, or a TPE residual-error node is not a row
-        // predicate — fail closed.
-        other => Err(plan_datafusion_err!(
-            "unsupported Cedar residual expression: {other:?}"
-        )),
-    }
-}
-
-/// Translate a binary-operator node. Comparison and boolean combinators map to
-/// DataFusion; tag ops (`hasTag`/`getTag`) and everything else fail closed —
-/// TPE resolves tag ops against the supplied entities, so one surviving here
-/// means the tag data was missing and we cannot prove the row/column is safe.
-fn translate_binary(op: &BinaryOp, left: &pst::Expr, right: &pst::Expr) -> Result<Expr> {
-    match op {
-        BinaryOp::And => {
-            // Fold `true &&` guards TPE may leave in place.
-            let l = fold_true(left)?;
-            let r = fold_true(right)?;
-            Ok(match (l, r) {
-                (None, None) => lit(true),
-                (Some(e), None) | (None, Some(e)) => e,
-                (Some(l), Some(r)) => l.and(r),
-            })
-        }
-        BinaryOp::Or => Ok(translate_expr(left)?.or(translate_expr(right)?)),
-        BinaryOp::Eq => Ok(translate_expr(left)?.eq(translate_expr(right)?)),
-        BinaryOp::NotEq => Ok(translate_expr(left)?.not_eq(translate_expr(right)?)),
-        BinaryOp::Less => Ok(translate_expr(left)?.lt(translate_expr(right)?)),
-        BinaryOp::LessEq => Ok(translate_expr(left)?.lt_eq(translate_expr(right)?)),
-        BinaryOp::Greater => Ok(translate_expr(left)?.gt(translate_expr(right)?)),
-        BinaryOp::GreaterEq => Ok(translate_expr(left)?.gt_eq(translate_expr(right)?)),
-        other => Err(plan_datafusion_err!(
-            "unsupported Cedar binary operator in residual: {other:?}"
-        )),
-    }
-}
-
-/// Translate a node, returning `None` if it is the literal `true` (an
-/// always-satisfied guard that contributes nothing to the predicate).
-fn fold_true(node: &pst::Expr) -> Result<Option<Expr>> {
-    if is_true_literal(node) {
-        return Ok(None);
-    }
-    Ok(Some(translate_expr(node)?))
-}
-
-/// Whether a PST node denotes the (symbolic) `resource`, either as the `resource`
-/// variable or a TPE `Unknown` node standing in for it.
-fn base_is_resource(node: &pst::Expr) -> bool {
-    match node {
-        pst::Expr::Var(Var::Resource) => true,
-        pst::Expr::Unknown { name } => name.as_str() == "resource",
-        _ => false,
-    }
-}
-
-/// `resource.<attr> like <pattern>` -> SQL LIKE. Cedar's pattern is a sequence of
-/// wildcards and literal chars; we escape SQL LIKE metacharacters in literals.
-fn translate_like(expr: &pst::Expr, pattern: &[PatternElem]) -> Result<Expr> {
-    let mut sql = String::new();
-    for elem in pattern {
-        match elem {
-            PatternElem::Wildcard => sql.push('%'),
-            PatternElem::Char(c) => {
-                if *c == '%' || *c == '_' || *c == '\\' {
-                    sql.push('\\');
+            pst::Expr::GetAttr { expr, attr } => {
+                if self.base_is_resource(expr) {
+                    Ok(col(attr.as_str()))
+                } else {
+                    // principal.* should have been folded out by TPE; any remaining
+                    // non-resource attribute access is not a column reference.
+                    Err(plan_datafusion_err!(
+                        "residual references a non-resource attribute '{attr}'; not a column"
+                    ))
                 }
-                sql.push(*c);
             }
+
+            pst::Expr::UnaryOp { op, expr } => match op {
+                UnaryOp::Not => Ok(!self.translate_expr(expr)?),
+                other => Err(plan_datafusion_err!(
+                    "unsupported Cedar unary operator in residual: {other:?}"
+                )),
+            },
+
+            pst::Expr::BinaryOp { op, left, right } => self.translate_binary(op, left, right),
+
+            pst::Expr::Like { expr, pattern } => self.translate_like(expr, pattern),
+
+            // A surviving `resource`/`unknown` base outside a `.` access, a set/record
+            // literal, `if`/`is`/slots, or a TPE residual-error node is not a row
+            // predicate — fail closed.
+            other => Err(plan_datafusion_err!(
+                "unsupported Cedar residual expression: {other:?}"
+            )),
         }
     }
-    Ok(translate_expr(expr)?.like(lit(sql)))
+
+    /// Whether a PST node denotes the resource: the symbolic `resource` var, an
+    /// `Unknown` node standing in for it, or — when the request pinned a concrete
+    /// resource uid — an entity-uid literal equal to that uid.
+    fn base_is_resource(&self, node: &pst::Expr) -> bool {
+        match node {
+            pst::Expr::Var(Var::Resource) => true,
+            pst::Expr::Unknown { name } => name.as_str() == "resource",
+            // A concrete resource entity literal. The pst `EntityUID` and the
+            // public `EntityUid` are distinct types but share Cedar's canonical
+            // `Type::"eid"` textual form, so compare by that.
+            pst::Expr::Literal(Literal::EntityUID(uid)) => self
+                .resource_uid
+                .as_ref()
+                .is_some_and(|res| uid.to_string() == res.to_string()),
+            _ => false,
+        }
+    }
+
+    /// Translate a binary-operator node. Comparison and boolean combinators map to
+    /// DataFusion; tag ops (`hasTag`/`getTag`) and everything else fail closed —
+    /// TPE resolves tag ops against the supplied entities, so one surviving here
+    /// means the tag data was missing and we cannot prove the row/column is safe.
+    fn translate_binary(&self, op: &BinaryOp, left: &pst::Expr, right: &pst::Expr) -> Result<Expr> {
+        match op {
+            BinaryOp::And => {
+                // Fold `true &&` guards TPE may leave in place.
+                let l = self.fold_true(left)?;
+                let r = self.fold_true(right)?;
+                Ok(match (l, r) {
+                    (None, None) => lit(true),
+                    (Some(e), None) | (None, Some(e)) => e,
+                    (Some(l), Some(r)) => l.and(r),
+                })
+            }
+            BinaryOp::Or => Ok(self.translate_expr(left)?.or(self.translate_expr(right)?)),
+            BinaryOp::Eq => Ok(self.translate_expr(left)?.eq(self.translate_expr(right)?)),
+            BinaryOp::NotEq => Ok(self
+                .translate_expr(left)?
+                .not_eq(self.translate_expr(right)?)),
+            BinaryOp::Less => Ok(self.translate_expr(left)?.lt(self.translate_expr(right)?)),
+            BinaryOp::LessEq => Ok(self
+                .translate_expr(left)?
+                .lt_eq(self.translate_expr(right)?)),
+            BinaryOp::Greater => Ok(self.translate_expr(left)?.gt(self.translate_expr(right)?)),
+            BinaryOp::GreaterEq => Ok(self
+                .translate_expr(left)?
+                .gt_eq(self.translate_expr(right)?)),
+            other => Err(plan_datafusion_err!(
+                "unsupported Cedar binary operator in residual: {other:?}"
+            )),
+        }
+    }
+
+    /// Translate a node, returning `None` if it is the literal `true` (an
+    /// always-satisfied guard that contributes nothing to the predicate).
+    fn fold_true(&self, node: &pst::Expr) -> Result<Option<Expr>> {
+        if is_true_literal(node) {
+            return Ok(None);
+        }
+        Ok(Some(self.translate_expr(node)?))
+    }
+
+    /// `resource.<attr> like <pattern>` -> SQL LIKE. Cedar's pattern is a sequence of
+    /// wildcards and literal chars; we escape SQL LIKE metacharacters in literals.
+    fn translate_like(&self, expr: &pst::Expr, pattern: &[PatternElem]) -> Result<Expr> {
+        let mut sql = String::new();
+        for elem in pattern {
+            match elem {
+                PatternElem::Wildcard => sql.push('%'),
+                PatternElem::Char(c) => {
+                    if *c == '%' || *c == '_' || *c == '\\' {
+                        sql.push('\\');
+                    }
+                    sql.push(*c);
+                }
+            }
+        }
+        Ok(self.translate_expr(expr)?.like(lit(sql)))
+    }
 }
 
 /// Translate a Cedar literal (string/long/bool) to a DataFusion literal. Entity
@@ -207,7 +256,7 @@ mod tests {
     /// policies, so a hand-written policy exercises the same PST path.
     fn predicate(src: &str) -> Result<Option<Expr>> {
         let policy = Policy::parse(None, src).expect("valid policy");
-        CedarResidualTranslator.to_predicate(&policy)
+        CedarResidualTranslator::default().to_predicate(&policy)
     }
 
     #[test]
@@ -306,5 +355,39 @@ mod tests {
     fn trivially_true_clause_yields_no_predicate() {
         let pred = predicate(r#"permit(principal, action, resource) when { true };"#).unwrap();
         assert!(pred.is_none());
+    }
+
+    #[test]
+    fn concrete_resource_uid_base_becomes_col() {
+        // When the TPE request pins a concrete resource uid, the residual
+        // references it as an entity literal (`Table::"…".region`) rather than the
+        // symbolic `resource`. A translator carrying that uid recognizes it as the
+        // resource base and maps the attribute to a column.
+        let uid: EntityUid = r#"Table::"prod.customers.accounts""#.parse().unwrap();
+        let policy = Policy::parse(
+            None,
+            r#"permit(principal, action, resource)
+               when { Table::"prod.customers.accounts".region == "eu" };"#,
+        )
+        .expect("valid policy");
+        let expr = CedarResidualTranslator::with_resource_uid(uid)
+            .to_predicate(&policy)
+            .unwrap()
+            .unwrap();
+        assert_eq!(expr, col("region").eq(lit("eu")));
+    }
+
+    #[test]
+    fn other_entity_uid_base_fails_closed() {
+        // An entity literal that is *not* the resource uid is not a column
+        // reference; the default translator (no resource uid) rejects any entity
+        // literal base outright.
+        assert!(
+            predicate(
+                r#"permit(principal, action, resource)
+                   when { Table::"other.tbl".region == "eu" };"#
+            )
+            .is_err()
+        );
     }
 }
