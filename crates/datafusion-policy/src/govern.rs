@@ -97,6 +97,13 @@ pub async fn govern_plan(
         if policies.contains_key(&table) {
             continue;
         }
+        // A table marked governed was already secured at provider-resolution
+        // time (the secured-view tier); skipping it here is what keeps the two
+        // enforcement tiers mutually exclusive per (table, query) — nothing is
+        // double-masked. Taints were still recorded above.
+        if eval.catalog_facts.is_governed(&table) {
+            continue;
+        }
         let tp = policy
             .constrain(&table, schema.as_ref(), principal, eval)
             .await?;
@@ -529,6 +536,90 @@ mod tests {
         );
         // The injected predicate filters on `a.region`.
         assert!(rendered.contains(r#"name: "region""#));
+    }
+
+    /// A table marked governed (secured at provider-resolution time) gets no
+    /// second filter/mask from `govern_plan`, while an unmarked table in the
+    /// same plan is still constrained — and taints are recorded for *both*.
+    #[tokio::test]
+    async fn marked_governed_table_skipped_but_taints_still_recorded() {
+        use crate::FactStore as _;
+        use datafusion::logical_expr::JoinType;
+
+        // Facts: a.ssn is pii-tagged, b.ssn is secret-tagged; `a` is marked as
+        // already governed by the provider tier.
+        let sink = crate::CatalogFactSink::new();
+        for (name, tag) in [("a", "pii"), ("b", "secret")] {
+            sink.record(
+                TableReference::bare(name),
+                crate::TableFacts {
+                    column_tags: HashMap::from([(
+                        "ssn".to_string(),
+                        [tag.to_string()].into_iter().collect(),
+                    )]),
+                    ..Default::default()
+                },
+            );
+        }
+        sink.mark_governed(TableReference::bare("a"));
+        let store = std::sync::Arc::new(crate::InMemoryFactStore::new());
+        let eval = EvalContext {
+            catalog_facts: sink,
+            correlation_id: Some("session-1".to_string()),
+            fact_store: Some(store.clone()),
+            function_resolver: None,
+        };
+
+        // Distinguishable per-table filters so we can tell whose was injected.
+        let mut by_table = HashMap::new();
+        for (name, marker) in [("a", "marker-a"), ("b", "marker-b")] {
+            by_table.insert(
+                name.to_string(),
+                TablePolicy {
+                    row_filters: vec![col("region").eq(lit(marker))],
+                    column_masks: Default::default(),
+                },
+            );
+        }
+        let policy = PerTablePolicy {
+            by_table,
+            err: false,
+        };
+
+        let a = table_scan(Some("a"), &schema_3(), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let b = table_scan(Some("b"), &schema_3(), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        let plan = LogicalPlanBuilder::from(a)
+            .join(b, JoinType::Inner, (vec!["a.id"], vec!["b.id"]), None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let governed = govern_plan(&plan, &policy, &principal(), &eval)
+            .await
+            .unwrap();
+        let rendered = format!("{governed:?}");
+        // Only `b`'s filter was injected; marked `a` is untouched.
+        assert!(
+            rendered.contains("marker-b"),
+            "unmarked table must still be constrained: {rendered}"
+        );
+        assert!(
+            !rendered.contains("marker-a"),
+            "marked table must not be constrained again: {rendered}"
+        );
+        // Taints accrued for both tables regardless of the marker.
+        assert_eq!(
+            store.observed_taints("session-1"),
+            ["pii".to_string(), "secret".to_string()]
+                .into_iter()
+                .collect()
+        );
     }
 
     /// A policy-resolution error propagates out of `govern_plan` (fail-closed:

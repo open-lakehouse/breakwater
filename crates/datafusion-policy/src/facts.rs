@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use datafusion::sql::TableReference;
 
 /// Catalog-derived attributes of one table, gathered at resolution time and
@@ -104,6 +104,13 @@ pub fn normalize(table: &TableReference) -> TableReference {
 #[derive(Debug, Clone, Default)]
 pub struct CatalogFactSink {
     by_table: Arc<DashMap<TableReference, TableFacts>>,
+    /// Tables whose enforcement was already applied at provider-resolution
+    /// time (the secured-view tier). The planner-tier govern pass skips
+    /// constraining these, keeping the two tiers mutually exclusive per
+    /// (table, query). Like `by_table`, entries are re-populated on every
+    /// resolution of a per-session/per-query sink, so staleness is not a
+    /// concern.
+    governed: Arc<DashSet<TableReference>>,
 }
 
 impl CatalogFactSink {
@@ -120,6 +127,21 @@ impl CatalogFactSink {
     /// The facts recorded for `table`, if any.
     pub fn get(&self, table: &TableReference) -> Option<TableFacts> {
         self.by_table.get(&normalize(table)).map(|r| r.clone())
+    }
+
+    /// Mark `table` as governed at provider-resolution time: its enforcement
+    /// (row filters + column masks) is already baked into a secured-view
+    /// provider, so the planner-tier govern pass must not constrain it again.
+    /// Taint recording is unaffected — taints accrue regardless of which tier
+    /// enforces.
+    pub fn mark_governed(&self, table: TableReference) {
+        self.governed.insert(normalize(&table));
+    }
+
+    /// Whether `table` was [marked governed](Self::mark_governed) at
+    /// provider-resolution time.
+    pub fn is_governed(&self, table: &TableReference) -> bool {
+        self.governed.contains(&normalize(table))
     }
 
     /// Number of tables with recorded facts (for tests/diagnostics).
@@ -260,6 +282,21 @@ mod tests {
 
         // A different table is absent.
         assert!(sink.get(&TableReference::full("c", "s", "other")).is_none());
+    }
+
+    #[test]
+    fn governed_marker_keys_by_normalized_ref() {
+        let sink = CatalogFactSink::new();
+        assert!(!sink.is_governed(&TableReference::bare("t")));
+
+        sink.mark_governed(TableReference::bare("t"));
+        assert!(sink.is_governed(&TableReference::bare("t")));
+
+        // A fully-qualified ref is a distinct normalized key from a bare one.
+        let full = TableReference::full("c", "s", "t");
+        assert!(!sink.is_governed(&full));
+        sink.mark_governed(full.clone());
+        assert!(sink.is_governed(&full));
     }
 
     #[test]
