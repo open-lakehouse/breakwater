@@ -41,6 +41,8 @@ mod fact_store;
 mod function;
 #[cfg(feature = "fgac")]
 pub mod govern;
+#[cfg(feature = "fgac")]
+mod provider;
 
 pub use constraint::ConstraintTranslator;
 pub use engine::{PolicyEngine, StaticPolicyEngine};
@@ -52,8 +54,8 @@ pub use principal::{
 };
 pub use rule::PolicyQueryPlanner;
 pub use session::{
-    CatalogFactSinkExt, EvalContextProvider, PolicyBuilder, PolicyExtension, PolicySessionExt,
-    PrincipalExt, PrincipalProvider, SessionConfigEvalContextProvider,
+    CatalogFactSinkExt, EvalContextProvider, PolicyBuilder, PolicyEngineExt, PolicyExtension,
+    PolicySessionExt, PrincipalExt, PrincipalProvider, SessionConfigEvalContextProvider,
     SessionConfigPrincipalProvider, authorize_and_govern, instrument_session_state,
 };
 pub use types::{AttrValue, Decision};
@@ -64,5 +66,7 @@ pub use fact_store::{FactStore, InMemoryFactStore};
 pub use function::CatalogFunctionResolver;
 #[cfg(feature = "fgac")]
 pub use govern::{TablePolicy, govern_plan};
+#[cfg(feature = "fgac")]
+pub use provider::{GovernedTableProvider, govern_provider, govern_provider_from_config};
 #[cfg(feature = "fgac")]
 pub use session::{FactStoreExt, FunctionResolverExt};
