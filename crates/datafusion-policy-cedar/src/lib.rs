@@ -33,11 +33,12 @@ pub use cedar_entity::{parse_uid, principal_entities};
 // Re-export the neutral core's public surface so a Cedar host imports one crate.
 pub use datafusion_policy::{
     AgentClaims, AttrValue, CatalogFactSink, CatalogFactSinkExt, ConstraintTranslator, Decision,
-    EvalContext, EvalContextProvider, Group, IdentityError, IdentityProvider, PlanAction,
-    PolicyBuilder, PolicyEngine, PolicyExtension, PolicyQueryPlanner, PolicySessionExt,
-    PrincipalClaims, PrincipalEnrichment, PrincipalExt, PrincipalIdentity, PrincipalProvider,
-    SessionConfigEvalContextProvider, SessionConfigPrincipalProvider, StaticPolicyEngine,
-    TableFacts, authorize_and_govern, instrument_session_state, normalize, plan_actions,
+    EvalContext, EvalContextProvider, Governance, GovernanceBuilder, Group, IdentityError,
+    IdentityProvider, PlanAction, PolicyBuilder, PolicyEngine, PolicyExtension, PolicyQueryPlanner,
+    PolicySessionExt, Posture, PrincipalClaims, PrincipalEnrichment, PrincipalExt,
+    PrincipalIdentity, PrincipalProvider, SessionConfigEvalContextProvider,
+    SessionConfigPrincipalProvider, StaticPolicyEngine, TableFacts, authorize_and_govern,
+    authorize_and_govern_with_posture, instrument_session_state, normalize, plan_actions,
 };
 
 #[cfg(feature = "fgac")]

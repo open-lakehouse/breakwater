@@ -29,6 +29,7 @@
 mod constraint;
 mod engine;
 mod facts;
+mod governance;
 mod plan_actions;
 mod principal;
 mod rule;
@@ -51,6 +52,7 @@ mod provider;
 pub use constraint::ConstraintTranslator;
 pub use engine::{PolicyEngine, StaticPolicyEngine};
 pub use facts::{CatalogFactSink, EvalContext, TableFacts, normalize};
+pub use governance::{Governance, GovernanceBuilder, Posture};
 pub use plan_actions::{PlanAction, plan_actions};
 pub use principal::{
     AgentClaims, Group, IdentityError, IdentityProvider, PrincipalClaims, PrincipalEnrichment,
@@ -60,7 +62,8 @@ pub use rule::PolicyQueryPlanner;
 pub use session::{
     CatalogFactSinkExt, EvalContextProvider, PolicyBuilder, PolicyEngineExt, PolicyExtension,
     PolicySessionExt, PrincipalExt, PrincipalProvider, SessionConfigEvalContextProvider,
-    SessionConfigPrincipalProvider, authorize_and_govern, instrument_session_state,
+    SessionConfigPrincipalProvider, authorize_and_govern, authorize_and_govern_with_posture,
+    instrument_session_state,
 };
 pub use types::{AttrValue, Decision};
 
