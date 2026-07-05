@@ -4,8 +4,10 @@
 > (`platform-policy-architecture.md`, `policy-enforcement-design.md`,
 > `docs/adr/0005`–`0007`) that describe the enclosing platform's session
 > integration and live in the [hydrofoil](https://github.com/open-lakehouse/hydrofoil)
-> repo. The `datafusion-policy-cedar` / `cedar-oci` crates here own the reusable
-> mechanism; hydrofoil is the reference host that composes it.
+> repo, **not** here — every `docs/adr/…` path below is relative to the hydrofoil
+> repo (`hydrofoil/docs/adr/…`). The `datafusion-policy-cedar` / `cedar-oci`
+> crates here own the reusable mechanism; hydrofoil is the reference host that
+> composes it.
 
 > The operational companion to `docs/platform-policy-architecture.md`. That
 > document settles *what* the policy decision points are and leans on a **hybrid

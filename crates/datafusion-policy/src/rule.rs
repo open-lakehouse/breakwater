@@ -16,20 +16,28 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{Result, exec_err};
 
 use crate::engine::PolicyEngine;
-use crate::session::{EvalContextProvider, PrincipalProvider, authorize_and_govern};
+use crate::governance::Posture;
+use crate::session::{EvalContextProvider, PrincipalProvider, authorize_and_govern_with_posture};
 
 /// A [`QueryPlanner`] that governs and gates a query before physical planning.
 ///
 /// Its `create_physical_plan` resolves the principal and per-query eval context,
-/// runs [`authorize_and_govern`] (row filters + column masks, then the coarse
-/// access gate on the optimized plan; a denied query errors), and hands the
-/// governed plan to the wrapped inner planner for the actual physical planning.
-/// Wrapping an inner planner (rather than owning a `DefaultPhysicalPlanner`) is
-/// what lets this compose with other query-planner-wrapping extensions.
+/// runs [`authorize_and_govern_with_posture`] (row filters + column masks, then
+/// the coarse access gate on the optimized plan; a denied query errors under
+/// [`Posture::Enforcing`]), and hands the governed plan to the wrapped inner
+/// planner for the actual physical planning. Wrapping an inner planner (rather
+/// than owning a `DefaultPhysicalPlanner`) is what lets this compose with other
+/// query-planner-wrapping extensions.
+///
+/// The [`Posture`] is fixed at construction (not read from config per query), so
+/// a session's enforcement stance can't drift mid-flight: [`Posture::Enforcing`]
+/// fails closed, [`Posture::Permissive`] evaluates-and-logs but enforces nothing.
+/// A planner is never installed under [`Posture::Disabled`].
 pub struct PolicyQueryPlanner {
     policy: Arc<dyn PolicyEngine>,
     principal: Arc<dyn PrincipalProvider>,
     eval: Arc<dyn EvalContextProvider>,
+    posture: Posture,
     inner: Arc<dyn QueryPlanner + Send + Sync>,
 }
 
@@ -42,18 +50,35 @@ impl std::fmt::Debug for PolicyQueryPlanner {
 }
 
 impl PolicyQueryPlanner {
-    /// Build a planner that enforces `policy` (resolving the principal / eval
+    /// Build a planner that **enforces** `policy` (resolving the principal / eval
     /// context via the providers) and delegates physical planning to `inner`.
+    ///
+    /// Equivalent to [`with_posture`](Self::with_posture) at
+    /// [`Posture::Enforcing`] — the fail-closed default.
     pub fn new(
         policy: Arc<dyn PolicyEngine>,
         principal: Arc<dyn PrincipalProvider>,
         eval: Arc<dyn EvalContextProvider>,
         inner: Arc<dyn QueryPlanner + Send + Sync>,
     ) -> Self {
+        Self::with_posture(policy, principal, eval, Posture::Enforcing, inner)
+    }
+
+    /// Build a planner with an explicit [`Posture`]. Under
+    /// [`Posture::Permissive`] the planner evaluates the policy and logs what it
+    /// *would* enforce, but returns the un-governed plan and never denies.
+    pub fn with_posture(
+        policy: Arc<dyn PolicyEngine>,
+        principal: Arc<dyn PrincipalProvider>,
+        eval: Arc<dyn EvalContextProvider>,
+        posture: Posture,
+        inner: Arc<dyn QueryPlanner + Send + Sync>,
+    ) -> Self {
         Self {
             policy,
             principal,
             eval,
+            posture,
             inner,
         }
     }
@@ -70,19 +95,35 @@ impl QueryPlanner for PolicyQueryPlanner {
 
         // The host binds the principal into the session (via `PrincipalExt`, or a
         // custom provider) before installing this planner; a `None` here means an
-        // unbound session, which we fail closed on rather than authorizing against
-        // an invented identity — a deny-by-default policy must not be bypassed by a
-        // missing principal.
-        let Some(principal) = self.principal.principal(session_state).await else {
-            return exec_err!("no principal bound to session; cannot authorize query");
+        // unbound session. Under `Enforcing` we fail closed rather than authorizing
+        // against an invented identity — a deny-by-default policy must not be
+        // bypassed by a missing principal. Under `Permissive` there is nothing to
+        // enforce, so an unbound session logs and passes through un-governed.
+        let principal = match self.principal.principal(session_state).await {
+            Some(principal) => principal,
+            None => match self.posture {
+                Posture::Permissive => {
+                    tracing::info!(
+                        target: "breakwater::governance",
+                        posture = "permissive",
+                        "no principal bound to session; skipping evaluation"
+                    );
+                    return self
+                        .inner
+                        .create_physical_plan(logical_plan, session_state)
+                        .await;
+                }
+                _ => return exec_err!("no principal bound to session; cannot authorize query"),
+            },
         };
 
-        let governed = authorize_and_govern(
+        let governed = authorize_and_govern_with_posture(
             session_state,
             logical_plan,
             self.policy.as_ref(),
             &principal,
             &eval,
+            self.posture,
         )
         .await?;
 

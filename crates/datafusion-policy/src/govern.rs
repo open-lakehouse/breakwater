@@ -766,5 +766,83 @@ mod tests {
                 .sum();
             assert_eq!(rows, 1, "row filter not enforced");
         }
+
+        /// Under `Posture::Permissive`, `authorize_and_govern_with_posture`
+        /// computes the constraints (and logs them) but returns the *un-governed*
+        /// plan — so a masked column still reads its raw value. The dry-run
+        /// contract: evaluate everything, apply nothing.
+        #[tokio::test]
+        async fn permissive_does_not_apply_masks() {
+            use crate::Posture;
+            use crate::session::authorize_and_govern_with_posture;
+
+            let ctx = ctx().await;
+            let plan = ctx
+                .sql("SELECT ssn FROM t WHERE id = 1")
+                .await
+                .unwrap()
+                .into_unoptimized_plan();
+
+            let governed = authorize_and_govern_with_posture(
+                &ctx.state(),
+                &plan,
+                &mask_ssn(),
+                &principal(),
+                &EvalContext::default(),
+                Posture::Permissive,
+            )
+            .await
+            .unwrap();
+
+            // The raw ssn 'a' flows through un-masked (would be '***' if enforced).
+            let df = ctx.execute_logical_plan(governed).await.unwrap();
+            let batches = df.collect().await.unwrap();
+            let col = batches[0].column(0);
+            let arr = col
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                .unwrap();
+            assert_eq!(
+                arr.value(0),
+                "a",
+                "permissive must not apply the column mask"
+            );
+        }
+
+        /// Under `Posture::Enforcing` the same policy *does* mask — the mirror of
+        /// the permissive proof, so the two postures are shown to diverge only on
+        /// enforcement, not evaluation.
+        #[tokio::test]
+        async fn enforcing_applies_masks() {
+            use crate::Posture;
+            use crate::session::authorize_and_govern_with_posture;
+
+            let ctx = ctx().await;
+            let plan = ctx
+                .sql("SELECT ssn FROM t WHERE id = 1")
+                .await
+                .unwrap()
+                .into_unoptimized_plan();
+
+            let governed = authorize_and_govern_with_posture(
+                &ctx.state(),
+                &plan,
+                &mask_ssn(),
+                &principal(),
+                &EvalContext::default(),
+                Posture::Enforcing,
+            )
+            .await
+            .unwrap();
+
+            let df = ctx.execute_logical_plan(governed).await.unwrap();
+            let batches = df.collect().await.unwrap();
+            let arr = batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::StringArray>()
+                .unwrap();
+            assert_eq!(arr.value(0), "***", "enforcing must apply the column mask");
+        }
     }
 }

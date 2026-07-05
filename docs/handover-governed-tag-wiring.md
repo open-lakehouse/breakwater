@@ -1,5 +1,12 @@
 # Handover: wire governed (key→value) tags end-to-end so the Cedar column-mask FGAC path fires
 
+> **Status: RESOLVED (2026-07-05).** The host-side wiring landed in hydrofoil #65
+> (2026-07-04): hydrofoil now populates the governed-tag fields on `TableFacts`,
+> so the "inert in production" claim below is stale. The breakwater side
+> (governed-tag folding for both column *and* table tags) is fully wired and
+> tested — see PR #12 (table-tag folding) and `docs/typed-fgac-seams.md`. Kept
+> for historical context; do not action.
+
 Working document for the next session. Covers the current state of the typed-FGAC
 governed-tag seam across breakwater + hydrofoil (+ mangrove UC client), the gaps, and a
 scoped implementation plan. Written 2026-07-04 on branch `feat/typed-fgac-native-tags`.
@@ -11,6 +18,8 @@ production**: the host (hydrofoil) never populates the governed-tag fields on
 `TableFacts`, so every governed-tag policy silently no-ops. The fix is host-side
 wiring, gated behind a hydrofoil compatibility pass (hydrofoil is stale after the
 `datafusion-policy-cedar`/`datafusion-policy` split). Scope decisions are locked (below).
+
+_(Superseded — see the RESOLVED note at the top.)_
 
 ## Context / why
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | DONE (PR pending) |
+| **Status** | DONE (merged, PR #12) |
 | **Repo / branch** | breakwater / `fix/table-tag-folding` (branch off `main`) |
 | **Recommended model** | **Opus** — single-file change with an in-repo pattern to mirror; the tests are the substance |
 | **Depends on** | nothing (parallel to S1/S3/S5; S6 depends on this) |
