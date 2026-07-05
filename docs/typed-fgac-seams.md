@@ -51,12 +51,13 @@ PIP behind those neutral facts. Tag inheritance (catalog→schema→table) is
 pre-resolved by the host into these facts (column tags applied directly, matching
 UC).
 
-> **Status:** column-level governed tags are folded into the `Column` resource
-> entity today, so `read_column` tag matching works. Table-level
-> `governed_tags` are **not yet** folded into the `read_table` residual path
-> (the row-filter request keeps the `Table` resource unknown, which has no uid
-> to attach tags to) — so a `FOR TABLES WHEN has_tag_value(...)` row filter is
-> not functional yet. See `table_residuals` in `cedar.rs`.
+> **Status:** both column-level and table-level governed tags are folded into
+> their resource entities. `read_column` tag matching uses the concrete `Column`
+> entity; `read_table` uses a `Table` entity with a **concrete uid but unknown
+> attributes** — so `resource.hasTag`/`getTag` fold against the table's
+> `governed_tags` while per-row `resource.<col>` comparisons still survive as
+> row-filter residuals. A `FOR TABLES WHEN has_tag_value(...)` row filter is now
+> functional. See `table_residuals` in `cedar.rs`.
 
 ## Type-aware partial evaluation (TPE)
 

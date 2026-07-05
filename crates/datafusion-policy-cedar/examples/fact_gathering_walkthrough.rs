@@ -527,7 +527,7 @@ async fn main() {
     let response = gov_policies
         .tpe(&partial, &partial_entities, &schema)
         .expect("type-aware partial evaluation");
-    let translator = CedarResidualTranslator;
+    let translator = CedarResidualTranslator::default();
     println!("  facts: principal.region=eu (bound) · resource=UNKNOWN (deferred → residual)");
     let mut produced_residual = false;
     for residual in response.nontrivial_residual_policies() {

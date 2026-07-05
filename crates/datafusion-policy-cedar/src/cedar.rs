@@ -348,13 +348,24 @@ where
         // pushing each separately would AND them and hide rows any one grant
         // authorizes.) A permit residual that does not fold to a per-row predicate
         // fails closed by denying all rows.
+        //
+        // A *fully-resolved* `Deny` (a tag-conditioned forbid that folded true, or
+        // default-deny once every tag guard folded) denies all rows — such a
+        // policy is trivial post-fold and never appears among the residuals, so it
+        // must be read from the decision. A resolved `Allow` or an unresolved
+        // decision falls through to the residual row-filter construction.
         match self.table_residuals(&policy_set, cedar_schema, table, principal, facts.as_ref()) {
-            Ok((permits, forbids)) => {
-                if !forbids.is_empty() {
-                    // An undischarged table-level forbid: deny all rows.
+            Ok((decision, permits, forbids)) => {
+                if decision == Some(Decision::Deny) || !forbids.is_empty() {
+                    // A satisfied/undischarged table-level forbid, or default-deny:
+                    // deny all rows.
                     return Ok(deny_all_rows());
                 }
-                let translator = CedarResidualTranslator;
+                // The residual references the resource as the concrete table uid
+                // (attributes unknown), so the translator must recognize that uid
+                // as the resource base when mapping `resource.<attr>` to a column.
+                let translator =
+                    CedarResidualTranslator::with_resource_uid(table_resource_uid(table));
                 let mut row_filter: Option<Expr> = None;
                 for residual in permits {
                     match translator.to_predicate(&residual) {
@@ -603,51 +614,64 @@ where
         Ok(entities)
     }
 
-    /// Run TPE for a `read_table` request over an *unknown* `Table` resource and
-    /// return the surviving (permit, forbid) residual policies.
+    /// Run TPE for a `read_table` request over a `Table` resource whose uid is
+    /// concrete (so its governed tags fold) but whose attributes are unknown (so
+    /// `resource.<col>` comparisons survive as row-filter residuals).
+    ///
+    /// Returns the fully-resolved `decision` (when TPE resolves everything: a
+    /// satisfied forbid or default-deny ⇒ `Deny`; a satisfied unconditional
+    /// permit ⇒ `Allow`; `None` when genuine residuals remain) together with the
+    /// surviving nontrivial (permit, forbid) residual policies. The caller needs
+    /// both: `nontrivial_residual_policies` drops trivially-true/false policies,
+    /// so a tag-conditioned forbid that folds *true* (denies the whole table)
+    /// shows up only in `decision`, not the forbid residuals.
     fn table_residuals(
         &self,
         policy_set: &cedar_policy::PolicySet,
         schema: &Schema,
         table: &TableReference,
         principal: &PrincipalIdentity,
-        _facts: Option<&TableFacts>,
-    ) -> Result<(Vec<Policy>, Vec<Policy>)> {
+        facts: Option<&TableFacts>,
+    ) -> Result<(Option<Decision>, Vec<Policy>, Vec<Policy>)> {
         use cedar_oci::{EntityId, EntityUid};
         let action = EntityUid::from_type_name_and_id(
             "Action".parse().unwrap(),
             EntityId::new("read_table"),
         );
         let principal_uid = PartialEntityUid::from_concrete(parse_uid(&principal.uid)?);
-        let table_type = EntityTypeName::from_str("Table")
-            .map_err(|e| plan_datafusion_err!("invalid entity type name 'Table': {e}"))?;
-        // The Table resource is left *unknown* so per-row `resource.<col>`
-        // comparisons survive as row-filter residuals.
+
+        // The Table resource is *concrete* in uid so its governed tags can be
+        // folded, but its **attributes stay unknown** (`attrs: None`): per-row
+        // `resource.<col>` comparisons survive as row-filter residuals, while
+        // `resource.hasTag`/`getTag` fold concretely against the tags below.
         //
-        // NOTE: table-level governed tags (`TableFacts.governed_tags`) are NOT yet
-        // folded here — an unknown resource has no uid to key a tags-bearing
-        // entity onto, so a `read_table` row filter conditioned on
-        // `resource.hasTag`/`getTag` cannot fold today and fails closed. Folding
-        // table tags needs a request shape that keeps attributes symbolic while
-        // making tags concrete; wiring that is future work (see
-        // `docs/typed-fgac-seams.md`). The column-mask path already folds native
-        // tags because its resource uid is concrete.
-        let resource_uid = PartialEntityUid::new(table_type, None);
+        // Untagged tables get `tags: Some(empty)` (not `None`): an empty tags map
+        // makes `hasTag(k)` fold to `false` rather than staying unknown — an
+        // unknown tags map would keep the residual unfoldable and fail closed for
+        // everyone. See the `untagged_table` proof test.
+        let table_uid = table_resource_uid(table);
+        let table_tags = facts
+            .map(|f| native_tags(&f.governed_tags))
+            .unwrap_or_default();
+        let table_entity =
+            PartialEntity::new(table_uid.clone(), None, None, Some(table_tags), schema)
+                .map_err(|e| plan_datafusion_err!("failed to build table partial entity: {e}"))?;
+        let resource_uid = PartialEntityUid::from_concrete(table_uid);
         let context = crate::visitor::table_context(table, &[])?;
 
         let request =
             PartialRequest::new(principal_uid, action, resource_uid, Some(context), schema)
                 .map_err(|e| plan_datafusion_err!("failed to build partial request: {e}"))?;
-        let entities = PartialEntities::from_partial_entities(
-            self.principal_partial_entities(principal, schema)?,
-            schema,
-        )
-        .map_err(|e| plan_datafusion_err!("failed to build partial entities: {e}"))?;
+        let mut partial_entities = self.principal_partial_entities(principal, schema)?;
+        partial_entities.push(table_entity);
+        let entities = PartialEntities::from_partial_entities(partial_entities, schema)
+            .map_err(|e| plan_datafusion_err!("failed to build partial entities: {e}"))?;
 
         let response = policy_set
             .tpe(&request, &entities, schema)
             .map_err(|e| plan_datafusion_err!("TPE failed: {e}"))?;
 
+        let decision = response.decision().map(neutral_decision);
         let mut permits = Vec::new();
         let mut forbids = Vec::new();
         for policy in response.nontrivial_residual_policies() {
@@ -656,7 +680,7 @@ where
                 cedar_policy::Effect::Forbid => forbids.push(policy),
             }
         }
-        Ok((permits, forbids))
+        Ok((decision, permits, forbids))
     }
 
     /// Determine whether `column` is masked for this principal. Returns the
@@ -1660,6 +1684,224 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(tp.column_masks.get("ssn"), Some(&lit(DEFAULT_MASK)));
+        }
+
+        // --- Table-level governed-tag folding (W3): a `read_table` row filter
+        // gated on `resource.hasTag`/`getTag` folds against the table's own
+        // governed tags, mirroring the `Column` path. `resource.<col>`
+        // comparisons still survive as row-filter residuals because the `Table`
+        // resource keeps its attributes unknown. ---
+
+        /// An `EvalContext` recording table-level `governed_tags` (key→value) for
+        /// the table these tests read.
+        fn eval_ctx_table_tags(governed_tags: &[(&str, &str)]) -> EvalContext {
+            let sink = CatalogFactSink::new();
+            sink.record(
+                table(),
+                TableFacts {
+                    governed_tags: governed_tags
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    ..Default::default()
+                },
+            );
+            EvalContext {
+                catalog_facts: sink,
+                ..Default::default()
+            }
+        }
+
+        /// A `permit` gated on a table governed tag (UC `has_tag_value` analog).
+        const TAG_ROW_FILTER: &str = r#"
+            permit (principal, action == Action::"read_table", resource)
+            when {
+                resource.hasTag("classification")
+                && resource.getTag("classification") == "internal"
+            };
+        "#;
+
+        #[tokio::test]
+        async fn tag_condition_folds_away_for_tagged_table() {
+            // The table carries classification=internal, so the tag guard folds to
+            // true and the permit becomes unconditional: no row filter for a
+            // permitted principal.
+            let engine = policy_with_schema(
+                InMemory::new(TAG_ROW_FILTER),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[("classification", "internal")]),
+                )
+                .await
+                .unwrap();
+            assert!(
+                tp.row_filters.is_empty(),
+                "tag guard folds true ⇒ unconditional permit, no filter: {:?}",
+                tp.row_filters
+            );
+        }
+
+        #[tokio::test]
+        async fn tag_condition_folds_false_for_wrong_value() {
+            // A table tagged classification=public folds the `== "internal"` guard
+            // to false, dropping the only permit. TPE resolves to a full Deny (no
+            // permits, no forbids), so `constrain` hides all rows.
+            let engine = policy_with_schema(
+                InMemory::new(TAG_ROW_FILTER),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[("classification", "public")]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(tp.row_filters, vec![lit(false)]);
+        }
+
+        #[tokio::test]
+        async fn untagged_table_folds_hastag_false_not_unknown() {
+            // The load-bearing case: an untagged table gets `tags: Some(empty)`, so
+            // `hasTag("classification")` folds to *false* (not unknown), dropping
+            // the permit ⇒ full Deny ⇒ `lit(false)`. This deny outcome looks the
+            // same whether the guard folded false or stayed unknown-and-failed-
+            // closed, so `untagged_table_negated_hastag_folds_to_permit` below pins
+            // the *foldable* direction (an unknown map could not produce a permit).
+            let engine = policy_with_schema(
+                InMemory::new(TAG_ROW_FILTER),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(tp.row_filters, vec![lit(false)]);
+        }
+
+        #[tokio::test]
+        async fn untagged_table_negated_hastag_folds_to_permit() {
+            // Proves `hasTag` folds concretely (not unknown) on an untagged table:
+            // a permit gated on `!resource.hasTag("classification")` must fold to
+            // an *unconditional* permit. If the tags map were left unknown the guard
+            // would not fold and the residual would fail closed (deny-all) — so an
+            // empty row filter here is only possible if empty tags fold hasTag→false.
+            const POLICY: &str = r#"
+                permit (principal, action == Action::"read_table", resource)
+                when { !resource.hasTag("classification") };
+            "#;
+            let engine = policy_with_schema(
+                InMemory::new(POLICY),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[]),
+                )
+                .await
+                .unwrap();
+            assert!(
+                tp.row_filters.is_empty(),
+                "empty tags fold hasTag→false ⇒ unconditional permit: {:?}",
+                tp.row_filters
+            );
+        }
+
+        #[tokio::test]
+        async fn tag_conditioned_forbid_fires_only_on_matching_table() {
+            // A tag-conditioned forbid at table grain denies all rows only when the
+            // tag matches; an unmatched table falls through to the permit.
+            const POLICY: &str = r#"
+                permit (principal, action == Action::"read_table", resource);
+                forbid (principal, action == Action::"read_table", resource)
+                when { resource.hasTag("classification")
+                    && resource.getTag("classification") == "restricted" };
+            "#;
+            let engine = policy_with_schema(
+                InMemory::new(POLICY),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+
+            // Matching table: forbid fires ⇒ deny all rows.
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[("classification", "restricted")]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(tp.row_filters, vec![lit(false)], "forbid fires on match");
+
+            // Non-matching table: forbid folds away, blanket permit survives ⇒ no
+            // row filter.
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[("classification", "internal")]),
+                )
+                .await
+                .unwrap();
+            assert!(
+                tp.row_filters.is_empty(),
+                "forbid does not fire on non-match: {:?}",
+                tp.row_filters
+            );
+        }
+
+        #[tokio::test]
+        async fn tag_folds_while_column_comparison_survives() {
+            // Mixed guard: the tag part folds concretely against the table's tags,
+            // while `resource.region == principal.region` survives as a translated
+            // row-filter predicate — proving attributes stay symbolic even though
+            // the resource uid is now concrete.
+            const POLICY: &str = r#"
+                permit (principal, action == Action::"read_table", resource)
+                when {
+                    resource.hasTag("classification")
+                    && resource.getTag("classification") == "internal"
+                    && resource.region == principal.region
+                };
+            "#;
+            let engine = policy_with_schema(
+                InMemory::new(POLICY),
+                InMemory::new(""),
+                Some(cedar_schema()),
+            );
+            let tp = engine
+                .constrain(
+                    &table(),
+                    &df_schema(),
+                    &alice_eu(),
+                    &eval_ctx_table_tags(&[("classification", "internal")]),
+                )
+                .await
+                .unwrap();
+            // The tag conjuncts fold away; only the column comparison remains.
+            assert_eq!(tp.row_filters, vec![col("region").eq(lit("eu"))]);
         }
     }
 }
