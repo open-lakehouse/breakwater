@@ -124,12 +124,35 @@ Every ambiguity denies rather than exposes data:
 | UC `CREATE POLICY` clause | breakwater equivalent |
 |---|---|
 | `TO principal … EXCEPT …` | permit/forbid scope + `unless { principal.… }` |
-| `FOR TABLES WHEN has_tag_value(k,v)` | `read_table` residual `when { resource.hasTag("k") && resource.getTag("k") == "v" }` *(table tag folding not yet wired — see status note above)* |
+| `FOR TABLES WHEN has_tag_value(k,v)` | `read_table` residual `when { resource.hasTag("k") && resource.getTag("k") == "v" }` |
 | `MATCH COLUMNS has_tag_value(k,v) AS a` | `read_column` residual over a `Column` whose `getTag` matches |
 | `ROW FILTER f` / `COLUMN MASK f` | `@row_filter_fn` / `@mask_fn` **or** `Tag.default_*_fn` → resolved `ScalarUDF` |
 | matched column = fn's 1st arg | masked `col(name)` is argument 0 |
 | `USING COLUMNS (…)` | `@using_columns("…")` |
 | (no function named) | generated `Expr` (native predicate / default `lit("***")`) |
+
+## Native ABAC without Cedar: `AbacPolicyEngine`
+
+The same governed-tag facts feed a second, **engine-free** consumer:
+`datafusion_policy::AbacPolicyEngine` (feature `fgac`). Where the Cedar adapter
+lowers policies to TPE residuals, `AbacPolicyEngine` reads a neutral,
+UC-ABAC-shaped `PolicyBinding` model (`to_principals`/`except_principals`, a
+`WHEN` table-tag condition, `MATCH COLUMNS` conditions, a `RowFilter` /
+`ColumnMask` kind, and an optional named function) directly off
+`TableFacts.policies` and derives the `TablePolicy` itself — no Cedar, no
+partial evaluation, no schema. Principal matching (uid / group / all-users) is
+its own seam (`PrincipalMatcher`, default `DefaultPrincipalMatcher`); function
+resolution reuses the same `CatalogFunctionResolver` as the Cedar path (an
+unresolvable named function fails closed). It is the shortest path for a host
+that already speaks Databricks ABAC and wants the bindings enforced without a
+policy engine. Bindings are pre-folded onto the facts by the host; the engine is
+a pure function of `(facts, principal)`.
+
+Either engine plugs into the same enforcement machinery via
+`Governance::builder().engine(…)` — see the **host recipe** in
+[`pluggable-policy-architecture.md`](pluggable-policy-architecture.md), which
+also documents the `Posture` (Disabled / Permissive / Enforcing) enforcement
+stance and the resolver-time vs. planner-backstop placements.
 
 ## Where the code lives
 
@@ -138,5 +161,8 @@ Every ambiguity denies rather than exposes data:
 - Neutral seam: `datafusion-policy` — `CatalogFunctionResolver` (`function.rs`),
   `TablePolicy` (`govern.rs`), governed tags on `TableFacts` (`facts.rs`),
   `EvalContext.function_resolver` + `FunctionResolverExt` (`session.rs`).
+- Native ABAC engine: `datafusion-policy` — `AbacPolicyEngine` + `PolicyBinding`
+  (`abac.rs`, `binding.rs`).
+- Host assembly: `datafusion-policy` — `Governance` / `Posture` (`governance.rs`).
 - Cedar adapter: `datafusion-policy-cedar` — TPE `constrain` + three-level resolution
   (`cedar.rs`), the PST residual translator (`translate.rs`).

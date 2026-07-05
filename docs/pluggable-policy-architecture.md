@@ -45,7 +45,14 @@ pub trait PolicyEngine: Debug + Send + Sync {
 ```
 
 `StaticPolicyEngine` (a fixed `Allow`/`Deny`) is the non-engine implementation
-that proves the trait needs no policy engine at all.
+that proves the trait needs no policy engine at all. `AbacPolicyEngine`
+(feature `fgac`) is a second neutral, engine-free implementation: it reads
+attribute-based bindings (the UC-ABAC-shaped `PolicyBinding` model — governed
+tags + `CREATE POLICY`-style row filters / column masks) straight from the
+per-query catalog facts, with no external policy engine. Its `is_allowed` is
+always `Allow` (ABAC has no coarse gate; privileges — or a composed engine —
+own deny); its `constrain` derives the row filters and column masks from the
+bindings that match the principal.
 
 ### The two evaluations
 
@@ -93,6 +100,30 @@ so neither crate depends on host types.
 unmodeled state-changing DDL, provider error, a `column_mask` without a resolvable
 column → deny/mask, never open.
 
+### Two enforcement placements
+
+Fine-grained governance can be applied at either of two points, and they are
+mutually exclusive per `(table, query)` so nothing is ever double-masked:
+
+1. **Resolver-time secured view** (`GovernedTableProvider`, feature `fgac`) — a
+   host that resolves tables through the catalog can wrap a base `TableProvider`
+   in a governed one at *resolution* time (`govern_provider` /
+   `govern_provider_from_config`, the latter reading the engine back from the
+   `PolicyEngineExt` on `SessionConfig`). The secured view carries the same
+   `Filter(row_filters, Projection(masks, scan))` shape `govern_plan` produces,
+   built over the base provider — so a table is governed the moment it is named,
+   before any plan rewrite.
+2. **Planner backstop** (`govern_plan` inside `PolicyQueryPlanner`) — the
+   pre-optimize plan rewrite described above, for every `TableScan` the plan
+   reads.
+
+**The governed-set marker.** When the resolver tier secures a table it calls
+`CatalogFactSink::mark_governed(table)`. `govern_plan` skips any table marked
+governed (it was already secured upstream) while still recording its taints —
+this is what keeps the two tiers mutually exclusive without losing the taint
+ledger. A host uses whichever tier fits its resolution path; both read the same
+`PolicyEngine` and produce the same enforcement shape.
+
 ## The neutral constraint carrier
 
 Every engine returns a different fine-grained shape, all reducible to one neutral
@@ -138,8 +169,62 @@ principal → Cedar entity lowering (`cedar_entity`), the Cedar residual →
 `TablePolicy` mapping, and `CedarResidualTranslator`. It re-exports the neutral
 core's public surface so a Cedar host imports a single crate.
 
+## The host recipe: `Governance` + `Posture`
+
+Wiring the pieces by hand — bind the principal as a `PrincipalExt` *before*
+installing the planner, populate a `CatalogFactSinkExt` per query, set the
+`PolicyEngineExt`, the `FactStoreExt`, the `FunctionResolverExt`, and remember to
+call `IdentityProvider::enrich` — is error-prone, and every omission fails
+*open* (a forgotten engine silently degrades to `StaticPolicyEngine(Allow)`).
+`datafusion_policy::Governance` is the one-obvious-way assembly that removes that
+burden. It is built once per server:
+
+```rust,ignore
+let gov = Governance::builder()
+    .posture(Posture::Enforcing)
+    .engine(engine)                 // Arc<dyn PolicyEngine>
+    .identity_provider(idp)         // optional
+    .function_resolver(resolver)    // optional (fgac)
+    .fact_store(store)              // optional (fgac); defaults to InMemoryFactStore
+    .build()?;                      // Enforcing + no engine => Err at startup
+```
+
+Per session / per request:
+
+- `gov.bind_principal(claims, base).await?` runs the identity-provider
+  enrichment (fail-closed under `Enforcing`) and folds it onto the principal.
+- `gov.attach(config, principal)` sets **all** the `SessionConfig` extensions in
+  one call, taking the principal as a required argument — so a missing principal
+  is unrepresentable at the call site.
+- `gov.instrument(state)` wraps the planner at the profile's posture. A host that
+  composes its own `QueryPlanner` (e.g. one sequencing policy + lineage) reads
+  `gov.engine()` and the provider accessors and builds the composed planner
+  itself instead.
+
+### `Posture` — the enforcement stance
+
+Ungoverned operation is never the accidental result of a forgotten wire-up; it
+is one explicit, build-time choice:
+
+| Posture | Coarse gate + constraints | On `Deny` | Masks/filters | Unbound principal |
+| --- | --- | --- | --- | --- |
+| `Disabled` | not evaluated (no planner installed) | — | — | — |
+| `Permissive` | **evaluated**, logged (`decision`, `would_block`, `would_constrain`) | logs, does **not** error | **not applied** | passes through |
+| `Enforcing` | evaluated | authorization error | applied | fails closed |
+
+`Permissive` is the rollout / dry-run stance: it reuses the exact evaluation
+path of `Enforcing`, so the decisions it *logs* are the ones enforcement *would*
+have applied — you can watch what a policy will do before turning it on. The
+posture is fixed inside `PolicyQueryPlanner` at construction, so a session's
+stance cannot drift mid-flight. `build()` validates completeness at startup:
+`Permissive`/`Enforcing` require an engine, and `Enforcing` warns when no
+function resolver is configured (a policy naming a masking function would
+otherwise fail closed at query time).
+
 ## Related
 
 - [`docs/policy-fact-gathering.md`](policy-fact-gathering.md) — the fact-locality
   model (local-ephemeral catalog facts vs. shared-session-scoped taints) and the
   end-to-end walkthrough (`fact_gathering_walkthrough` example).
+- [`docs/typed-fgac-seams.md`](typed-fgac-seams.md) — how governed tags, TPE
+  residuals, and catalog functions become `TablePolicy` row filters / masks.
