@@ -36,6 +36,8 @@ mod session;
 mod types;
 
 #[cfg(feature = "fgac")]
+mod abac;
+#[cfg(feature = "fgac")]
 mod binding;
 #[cfg(feature = "fgac")]
 mod fact_store;
@@ -62,6 +64,8 @@ pub use session::{
 };
 pub use types::{AttrValue, Decision};
 
+#[cfg(feature = "fgac")]
+pub use abac::{AbacPolicyEngine, DefaultPrincipalMatcher, PrincipalMatcher};
 #[cfg(feature = "fgac")]
 pub use binding::{BindingKind, ColumnMatch, FunctionArg, PolicyBinding, TagCondition};
 #[cfg(feature = "fgac")]
