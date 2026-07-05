@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use datafusion::common::tree_node::{
     Transformed, TreeNode as _, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
-use datafusion::common::{Column, Result};
+use datafusion::common::{Column, DFSchema, Result};
+use datafusion::logical_expr::expr_fn::cast;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::sql::TableReference;
 
@@ -135,6 +136,51 @@ fn record_taints(
     }
 }
 
+/// Apply one table's enforcement to the plan node reading it, producing the
+/// canonical `Filter(row_filters AND-reduced, Projection(masks, plan))` shape.
+///
+/// This is the single enforcement shape shared by both placements: the
+/// planner-tier rewrite ([`govern_plan`]) hands in the `TableScan` it visits,
+/// and the provider-tier secured view hands in a scan built over the base
+/// provider. `schema` is the plan node's (projected) schema — the columns the
+/// projection must reproduce.
+pub(crate) fn apply_table_policy(
+    plan: LogicalPlan,
+    schema: &DFSchema,
+    policy: &TablePolicy,
+) -> Result<LogicalPlan> {
+    let mut builder = LogicalPlanBuilder::from(plan);
+
+    // Column masks: rebuild the projection, replacing masked columns with
+    // their mask expression and passing the rest through unchanged. A masked
+    // column must preserve the original *qualified* column identity (e.g.
+    // `t.ssn`) so downstream nodes that reference the qualified column still
+    // resolve, and the original `DataType` (via the CAST) so DESCRIBE /
+    // information_schema stay indistinguishable from the base table.
+    if !policy.column_masks.is_empty() {
+        let projections: Vec<Expr> = schema
+            .iter()
+            .map(|(qualifier, field)| {
+                let name = field.name();
+                match policy.column_masks.get(name) {
+                    Some(mask) => cast(mask.clone(), field.data_type().clone())
+                        .alias_qualified(qualifier.cloned(), name),
+                    None => Expr::Column(Column::new(qualifier.cloned(), name)),
+                }
+            })
+            .collect();
+        builder = builder.project(projections)?;
+    }
+
+    // Row filters: AND them together into one filter above the (possibly
+    // masked) scan.
+    if let Some(predicate) = policy.row_filters.iter().cloned().reduce(Expr::and) {
+        builder = builder.filter(predicate)?;
+    }
+
+    builder.build()
+}
+
 /// The sync rewriter that wraps each governed `TableScan` in a mask projection
 /// and a row filter.
 struct GovernRewriter {
@@ -153,33 +199,7 @@ impl TreeNodeRewriter for GovernRewriter {
         };
 
         let schema = scan.projected_schema.clone();
-        let mut builder = LogicalPlanBuilder::from(node.clone());
-
-        // Column masks: rebuild the projection, replacing masked columns with
-        // their mask expression and passing the rest through unchanged. Both
-        // must preserve the original *qualified* column identity (e.g. `t.ssn`)
-        // so downstream nodes that reference the qualified column still resolve.
-        if !tp.column_masks.is_empty() {
-            let projections: Vec<Expr> = schema
-                .iter()
-                .map(|(qualifier, field)| {
-                    let name = field.name();
-                    match tp.column_masks.get(name) {
-                        Some(mask) => mask.clone().alias_qualified(qualifier.cloned(), name),
-                        None => Expr::Column(Column::new(qualifier.cloned(), name)),
-                    }
-                })
-                .collect();
-            builder = builder.project(projections)?;
-        }
-
-        // Row filters: AND them together into one filter above the (possibly
-        // masked) scan.
-        if let Some(predicate) = tp.row_filters.iter().cloned().reduce(Expr::and) {
-            builder = builder.filter(predicate)?;
-        }
-
-        Ok(Transformed::yes(builder.build()?))
+        Ok(Transformed::yes(apply_table_policy(node, &schema, tp)?))
     }
 }
 
@@ -372,6 +392,31 @@ mod tests {
         assert!(
             matches!(id_passthrough, Expr::Column(_)),
             "unmasked column should pass through as a Column"
+        );
+    }
+
+    #[tokio::test]
+    async fn mask_preserves_column_name_and_data_type() {
+        // Mask an Int64 column with an Int32 literal: the CAST added by
+        // `apply_table_policy` must restore the original DataType so the
+        // governed schema is indistinguishable from the base table.
+        let mut masks = HashMap::new();
+        masks.insert("id".to_string(), lit(0i32));
+        let policy = FixedPolicy(TablePolicy {
+            row_filters: vec![],
+            column_masks: masks,
+        });
+        let governed = govern_plan(&scan(), &policy, &principal(), &EvalContext::default())
+            .await
+            .unwrap();
+        let field = governed
+            .schema()
+            .field_with_unqualified_name("id")
+            .expect("masked column keeps its name");
+        assert_eq!(
+            field.data_type(),
+            &DataType::Int64,
+            "masked column must keep the original DataType"
         );
     }
 
