@@ -28,6 +28,7 @@ use datafusion_common::{Result, exec_err};
 
 use crate::engine::{PolicyEngine, StaticPolicyEngine};
 use crate::facts::{CatalogFactSink, EvalContext};
+use crate::governance::Posture;
 use crate::principal::PrincipalIdentity;
 use crate::rule::PolicyQueryPlanner;
 use crate::types::Decision;
@@ -184,6 +185,9 @@ async fn govern_plan(
 /// `state` is used to optimize the governed plan so the gate sees the
 /// projections/filters pushed down to the table scan — authorizing against the
 /// data actually accessed.
+///
+/// A shorthand for [`authorize_and_govern_with_posture`] at [`Posture::Enforcing`]
+/// — the historical, always-enforce behavior.
 pub async fn authorize_and_govern(
     state: &SessionState,
     plan: &LogicalPlan,
@@ -191,15 +195,74 @@ pub async fn authorize_and_govern(
     principal: &PrincipalIdentity,
     eval: &EvalContext,
 ) -> Result<LogicalPlan> {
+    authorize_and_govern_with_posture(state, plan, policy, principal, eval, Posture::Enforcing)
+        .await
+}
+
+/// Govern + gate `plan` under an explicit [`Posture`].
+///
+/// - [`Posture::Enforcing`] — govern the plan, gate the optimized form, and
+///   error on `Deny`; returns the governed plan on `Allow`. Identical to
+///   [`authorize_and_govern`].
+/// - [`Posture::Permissive`] — evaluate *everything* (constraints are computed,
+///   taints recorded, the coarse gate decided) and emit structured logs, but
+///   enforce nothing: the original plan is returned unchanged and a `Deny` does
+///   not error. The dry-run / rollout mode. A policy-*resolution* error still
+///   propagates — an engine that cannot answer is a misconfiguration, not a
+///   would-block signal.
+/// - [`Posture::Disabled`] — never reaches here (the planner isn't installed).
+///
+/// `Permissive` deliberately reuses the same evaluation path as `Enforcing` so
+/// the logged decisions are exactly the ones enforcement *would* have applied.
+pub async fn authorize_and_govern_with_posture(
+    state: &SessionState,
+    plan: &LogicalPlan,
+    policy: &dyn PolicyEngine,
+    principal: &PrincipalIdentity,
+    eval: &EvalContext,
+    posture: Posture,
+) -> Result<LogicalPlan> {
     let governed = govern_plan(plan, policy, principal, eval).await?;
     let optimized = state.optimize(&governed)?;
-    if policy.is_allowed(&optimized, principal, eval).await? == Decision::Deny {
-        return exec_err!(
-            "Principal '{}' is not authorized to execute this query",
-            principal.uid
-        );
+    let decision = policy.is_allowed(&optimized, principal, eval).await?;
+
+    match posture {
+        Posture::Enforcing => {
+            if decision == Decision::Deny {
+                return exec_err!(
+                    "Principal '{}' is not authorized to execute this query",
+                    principal.uid
+                );
+            }
+            Ok(governed)
+        }
+        Posture::Permissive => {
+            let would_block = decision == Decision::Deny;
+            // Whether governance would have altered the plan (masks / filters).
+            let would_constrain = !plan_shapes_equal(plan, &governed);
+            tracing::info!(
+                target: "breakwater::governance",
+                posture = "permissive",
+                principal = %principal.uid,
+                decision = ?decision,
+                would_block,
+                would_constrain,
+                "governance evaluated in permissive mode; enforcing nothing"
+            );
+            // Return the original plan: no masks, no filters, no deny.
+            Ok(plan.clone())
+        }
+        // The planner is never installed under Disabled, so enforcement code is
+        // unreachable; be safe and pass the plan through untouched.
+        Posture::Disabled => Ok(plan.clone()),
     }
-    Ok(governed)
+}
+
+/// Whether two logical plans are structurally identical (used only to log
+/// whether `Permissive` governance *would* have rewritten the plan). Compares
+/// the debug rendering — cheap and only on the permissive path.
+fn plan_shapes_equal(a: &LogicalPlan, b: &LogicalPlan) -> bool {
+    format!("{a:?}") == format!("{b:?}")
 }
 
 /// Entry point for instrumenting a DataFusion session with Cedar policy
@@ -227,6 +290,7 @@ pub struct PolicyBuilder {
     policy: Option<Arc<dyn PolicyEngine>>,
     principal: Option<Arc<dyn PrincipalProvider>>,
     eval: Option<Arc<dyn EvalContextProvider>>,
+    posture: Option<Posture>,
 }
 
 impl std::fmt::Debug for PolicyBuilder {
@@ -235,6 +299,7 @@ impl std::fmt::Debug for PolicyBuilder {
             .field("has_policy", &self.policy.is_some())
             .field("has_principal", &self.principal.is_some())
             .field("has_eval", &self.eval.is_some())
+            .field("posture", &self.posture.unwrap_or(Posture::Enforcing))
             .finish()
     }
 }
@@ -243,6 +308,14 @@ impl PolicyBuilder {
     /// Set the policy to enforce. Defaults to `StaticPolicyEngine(Allow)`.
     pub fn policy(mut self, policy: Arc<dyn PolicyEngine>) -> Self {
         self.policy = Some(policy);
+        self
+    }
+
+    /// Set the enforcement [`Posture`]. Defaults to [`Posture::Enforcing`]
+    /// (the historical fail-closed behavior). [`Governance`](crate::Governance)
+    /// sets this from its own posture.
+    pub fn posture(mut self, posture: Posture) -> Self {
+        self.posture = Some(posture);
         self
     }
 
@@ -280,11 +353,14 @@ impl PolicyBuilder {
             .eval
             .unwrap_or_else(|| Arc::new(SessionConfigEvalContextProvider));
 
+        let posture = self.posture.unwrap_or(Posture::Enforcing);
+
         let inner: Arc<dyn QueryPlanner + Send + Sync> = state.query_planner().clone();
-        let planner = Arc::new(PolicyQueryPlanner::new(
+        let planner = Arc::new(PolicyQueryPlanner::with_posture(
             policy.clone(),
             principal,
             eval,
+            posture,
             inner,
         ));
 
