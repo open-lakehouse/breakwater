@@ -74,8 +74,13 @@ pub enum FunctionArg {
 }
 
 /// One parsed UC ABAC policy: principals × tag-matched securable/columns → a
-/// row-filter or column-mask function call. See the [module docs](self) for how
-/// these are sourced and folded.
+/// row-filter or column-mask function call.
+///
+/// These are catalog *facts*, fetched per-securable at catalog-resolution time
+/// by the host (like governed tags) and delivered on
+/// [`TableFacts::policies`](crate::TableFacts::policies) as the
+/// already-inheritance-folded set applying to a table — the engine does not
+/// fold the catalog → schema → table hierarchy or parse predicate strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyBinding {
     /// The policy name (for diagnostics / mask-precedence ordering).

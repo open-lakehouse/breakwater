@@ -46,7 +46,8 @@ const ALL_USERS: &str = "account users";
 /// The [default implementation](DefaultPrincipalMatcher) normalizes an
 /// `EntityType::"name"`-wrapped uid down to `name` (both directions) so a
 /// Cedar-shaped `User::"alice"` matches a plain `alice` written in a UC policy,
-/// treats [`ALL_USERS`] as matching everyone, and is case-sensitive.
+/// treats the `account users` sentinel as matching everyone, and is
+/// case-sensitive.
 pub trait PrincipalMatcher: std::fmt::Debug + Send + Sync {
     /// Whether `name` (a `to`/`except` entry from a binding) refers to
     /// `principal` — by its uid or any of its groups.
@@ -55,7 +56,7 @@ pub trait PrincipalMatcher: std::fmt::Debug + Send + Sync {
 
 /// The default [`PrincipalMatcher`]: strips an `EntityType::"..."` wrapper off
 /// both the binding name and the principal's uid/groups before a case-sensitive
-/// compare, and treats [`ALL_USERS`] as matching every principal.
+/// compare, and treats the `account users` sentinel as matching every principal.
 #[derive(Debug, Clone, Default)]
 pub struct DefaultPrincipalMatcher;
 
