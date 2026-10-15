@@ -3047,7 +3047,7 @@ dependencies = [
 
 [[package]]
 name = "olai-datafusion-policy"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -3060,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "olai-datafusion-policy-cedar"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "cedar-local-agent",

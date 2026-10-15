@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/breakwater/compare/olai-datafusion-policy-cedar-v0.0.3...olai-datafusion-policy-cedar-v0.0.4) - 2026-10-15
+
+### Chore
+
+- *(deps)* [**breaking**] bump datafusion 55 (#15)
+
 ## [0.0.3](https://github.com/open-lakehouse/breakwater/compare/olai-datafusion-policy-cedar-v0.0.2...olai-datafusion-policy-cedar-v0.0.3) - 2026-07-05
 
 ### Added
