@@ -10,9 +10,9 @@ use std::str::FromStr as _;
 use std::sync::LazyLock;
 
 use cedar_policy::{Context, EntityTypeName, Request, RestrictedExpression};
+use datafusion::common::TableReference;
 use datafusion::common::plan_datafusion_err;
 use datafusion::error::Result;
-use datafusion::sql::TableReference;
 
 use cedar_oci::{EntityId, EntityUid};
 use datafusion_policy::{PlanAction, PrincipalIdentity, plan_actions};

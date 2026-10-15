@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
-use datafusion::sql::TableReference;
+use datafusion::common::TableReference;
 
 /// Catalog-derived attributes of one table, gathered at resolution time and
 /// folded into the Cedar `Table` resource entity. The host builds this from its

@@ -8,10 +8,10 @@ use cedar_local_agent::public::{
     EntityProviderError, PolicySetProviderError, SimpleEntityProvider, SimplePolicySetProvider,
 };
 use cedar_policy::{Entities, Entity, PolicySet, Request, RestrictedExpression, Schema};
+use datafusion::common::TableReference;
 use datafusion::common::plan_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::sql::TableReference;
 
 use cedar_oci::OciPolicyProvider;
 
@@ -1272,10 +1272,10 @@ mod tests {
         use async_trait::async_trait;
         use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
         use datafusion::common::DFSchema;
+        use datafusion::common::TableReference;
         use datafusion::logical_expr::{
             ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, Volatility, col, lit,
         };
-        use datafusion::sql::TableReference;
 
         use datafusion_policy::{CatalogFactSink, CatalogFunctionResolver, TableFacts};
 

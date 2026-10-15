@@ -10,13 +10,13 @@
 
 use std::collections::HashMap;
 
+use datafusion::common::TableReference;
 use datafusion::common::tree_node::{
     Transformed, TreeNode as _, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion::common::{Column, DFSchema, Result};
 use datafusion::logical_expr::expr_fn::cast;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion::sql::TableReference;
 
 use crate::engine::PolicyEngine;
 use crate::facts::EvalContext;

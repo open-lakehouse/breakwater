@@ -1,6 +1,6 @@
 //! The query-planner seam: [`PolicyQueryPlanner`].
 //!
-//! Enforcement is `&SessionState`-bound and async (it optimizes the plan and
+//! Enforcement is `&dyn Session`-bound and async (it optimizes the plan and
 //! assembles the [`EvalContext`](crate::EvalContext) from session extensions),
 //! so the [`QueryPlanner`] hook — the only async, state-bearing seam DataFusion
 //! exposes around physical planning — is where it lives, exactly as for
@@ -9,7 +9,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::execution::context::{QueryPlanner, SessionState};
+use datafusion::catalog::Session;
+use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 
@@ -89,7 +90,7 @@ impl QueryPlanner for PolicyQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let eval = self.eval.eval_context(session_state).await;
 
