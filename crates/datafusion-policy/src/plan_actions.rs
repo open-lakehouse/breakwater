@@ -7,10 +7,10 @@
 //! engine — an adapter lowers each [`PlanAction`] to its own authorization
 //! request (see the Cedar adapter's request-building for one lowering).
 
+use datafusion::common::TableReference;
 use datafusion::common::tree_node::{TreeNode as _, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::error::Result;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan, WriteOp};
-use datafusion::sql::TableReference;
 
 /// An access-relevant operation discovered in a logical plan.
 ///
@@ -95,9 +95,13 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
                         .push(PlanAction::DenyUnsupported(format!("DDL {}", other.name())));
                 }
             },
-            LogicalPlan::Dml(dml) => match dml.op {
-                // INSERT/UPDATE/DELETE/TRUNCATE all mutate the target table.
-                WriteOp::Insert(_) | WriteOp::Update | WriteOp::Delete | WriteOp::Truncate => {
+            LogicalPlan::Dml(dml) => match &dml.op {
+                // INSERT/UPDATE/DELETE/TRUNCATE/MERGE all mutate the target table.
+                WriteOp::Insert(_)
+                | WriteOp::Update
+                | WriteOp::Delete
+                | WriteOp::Truncate
+                | WriteOp::MergeInto(_) => {
                     self.actions
                         .push(PlanAction::WriteTable(dml.table_name.clone()));
                 }
@@ -105,6 +109,12 @@ impl TreeNodeVisitor<'_> for AuthorizationVisitor {
                 WriteOp::Ctas => {
                     self.actions
                         .push(PlanAction::CreateTable(dml.table_name.clone()));
+                }
+                // `WriteOp` is non-exhaustive: a write we do not model yet is
+                // denied rather than silently allowed through (as for DDL above).
+                other => {
+                    self.actions
+                        .push(PlanAction::DenyUnsupported(format!("DML {}", other.name())));
                 }
             },
             LogicalPlan::Extension(ext) => {

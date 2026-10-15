@@ -8,7 +8,7 @@ use crate::types::Decision;
 #[cfg(feature = "fgac")]
 use datafusion::common::DFSchema;
 #[cfg(feature = "fgac")]
-use datafusion::sql::TableReference;
+use datafusion::common::TableReference;
 
 /// The **decide** contract every policy engine implements — the engine-agnostic
 /// seam the enforcement layer talks to.

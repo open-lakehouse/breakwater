@@ -18,10 +18,10 @@
 //! *privileges'* job (or a composed Cedar engine's, in a later composite
 //! engine). This engine only produces fine-grained row filters and column masks.
 
+use datafusion::common::TableReference;
 use datafusion::common::{DFSchema, Result};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{Expr, col, lit};
-use datafusion::sql::TableReference;
 
 use crate::binding::{BindingKind, ColumnMatch, FunctionArg, PolicyBinding};
 use crate::engine::PolicyEngine;

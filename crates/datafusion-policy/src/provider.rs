@@ -19,6 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::TableReference;
 use datafusion::common::{Constraints, Result, Statistics, exec_err};
 use datafusion::datasource::{TableProvider, provider_as_source};
 use datafusion::logical_expr::dml::InsertOp;
@@ -27,7 +28,6 @@ use datafusion::logical_expr::{
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
-use datafusion::sql::TableReference;
 
 use crate::engine::PolicyEngine;
 use crate::facts::EvalContext;

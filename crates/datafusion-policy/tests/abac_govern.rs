@@ -15,13 +15,13 @@ use datafusion::arrow::array::{Array, Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
+use datafusion::common::TableReference;
 use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
-use datafusion::sql::TableReference;
 
 use olai_datafusion_policy::{
     AbacPolicyEngine, BindingKind, CatalogFactSink, CatalogFunctionResolver, ColumnMatch,

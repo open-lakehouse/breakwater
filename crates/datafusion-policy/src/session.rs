@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::{QueryPlanner, SessionContext, SessionState};
 use datafusion::logical_expr::LogicalPlan;
@@ -68,18 +69,18 @@ pub struct FactStoreExt(pub Arc<dyn crate::FactStore>);
 #[derive(Clone)]
 pub struct FunctionResolverExt(pub Arc<dyn crate::CatalogFunctionResolver>);
 
-/// Resolves the principal a query runs as, from a [`SessionState`].
+/// Resolves the principal a query runs as, from the planning [`Session`].
 ///
 /// Mirrors `datafusion_openlineage`'s `LineageContextProvider`: the provider
-/// only sees a `SessionState`, so per-request data reaches it through a typed
+/// only sees a `&dyn Session`, so per-request data reaches it through a typed
 /// `SessionConfig` extension. The default [`SessionConfigPrincipalProvider`]
 /// reads the [`PrincipalExt`] extension; a host can supply its own.
 #[async_trait]
 pub trait PrincipalProvider: std::fmt::Debug + Send + Sync {
-    async fn principal(&self, state: &SessionState) -> Option<PrincipalIdentity>;
+    async fn principal(&self, state: &dyn Session) -> Option<PrincipalIdentity>;
 }
 
-/// Assembles the per-query [`EvalContext`] from a [`SessionState`].
+/// Assembles the per-query [`EvalContext`] from the planning [`Session`].
 ///
 /// The policy layer needs the catalog facts, the correlation id, and (under
 /// `fgac`) the taint ledger — none of which live on the plan. This trait
@@ -88,7 +89,7 @@ pub trait PrincipalProvider: std::fmt::Debug + Send + Sync {
 /// extensions the host attached.
 #[async_trait]
 pub trait EvalContextProvider: std::fmt::Debug + Send + Sync {
-    async fn eval_context(&self, state: &SessionState) -> EvalContext;
+    async fn eval_context(&self, state: &dyn Session) -> EvalContext;
 }
 
 /// A [`PrincipalProvider`] that reads the [`PrincipalIdentity`] attached to the
@@ -98,7 +99,7 @@ pub struct SessionConfigPrincipalProvider;
 
 #[async_trait]
 impl PrincipalProvider for SessionConfigPrincipalProvider {
-    async fn principal(&self, state: &SessionState) -> Option<PrincipalIdentity> {
+    async fn principal(&self, state: &dyn Session) -> Option<PrincipalIdentity> {
         state
             .config()
             .get_extension::<PrincipalExt>()
@@ -115,7 +116,7 @@ pub struct SessionConfigEvalContextProvider;
 
 #[async_trait]
 impl EvalContextProvider for SessionConfigEvalContextProvider {
-    async fn eval_context(&self, state: &SessionState) -> EvalContext {
+    async fn eval_context(&self, state: &dyn Session) -> EvalContext {
         let catalog_facts = state
             .config()
             .get_extension::<CatalogFactSinkExt>()
@@ -189,7 +190,7 @@ async fn govern_plan(
 /// A shorthand for [`authorize_and_govern_with_posture`] at [`Posture::Enforcing`]
 /// — the historical, always-enforce behavior.
 pub async fn authorize_and_govern(
-    state: &SessionState,
+    state: &dyn Session,
     plan: &LogicalPlan,
     policy: &dyn PolicyEngine,
     principal: &PrincipalIdentity,
@@ -215,7 +216,7 @@ pub async fn authorize_and_govern(
 /// `Permissive` deliberately reuses the same evaluation path as `Enforcing` so
 /// the logged decisions are exactly the ones enforcement *would* have applied.
 pub async fn authorize_and_govern_with_posture(
-    state: &SessionState,
+    state: &dyn Session,
     plan: &LogicalPlan,
     policy: &dyn PolicyEngine,
     principal: &PrincipalIdentity,
