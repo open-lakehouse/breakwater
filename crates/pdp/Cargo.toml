@@ -1,0 +1,68 @@
+[package]
+name = "olai-pdp"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A Cedar policy decision point serving olai-auth's PDP wire API, with entities from Postgres"
+repository = "https://github.com/open-lakehouse/breakwater"
+homepage = "https://github.com/open-lakehouse/breakwater/tree/main/crates/pdp"
+documentation = "https://docs.rs/olai-pdp"
+readme = "README.md"
+keywords = ["cedar", "authorization", "pdp", "policy"]
+categories = ["authentication", "web-programming::http-server"]
+
+[[bin]]
+name = "pdp"
+path = "src/main.rs"
+required-features = ["bin"]
+
+[features]
+default = []
+# The standalone server (`pdp serve|migrate|check|healthcheck`). Hosts that
+# embed the router (`embed::start`) leave it off and link no CLI or runtime.
+bin = [
+  "dep:clap",
+  "dep:tracing-subscriber",
+  "axum/http1",
+  "axum/tokio",
+  "tokio/rt-multi-thread",
+  "tokio/macros",
+  "tokio/net",
+  "tokio/signal",
+  "tokio/io-util",
+]
+
+[dependencies]
+# The wire types the services' `HttpAuthorizer` speaks, the Cedar engine
+# (`CedarAuthorizer`), the grants entity loader over `authz.*`
+# (`GrantsEntityLoader`, `PgGrantStore`) and the `authz` migrations.
+olai-auth = { version = "0.0.4", features = ["cedar", "postgres"] }
+# The cedar-policy olai-auth builds, listing the schema's actions. Not the
+# workspace pin: that one turns on `protobufs`, which no PDP host needs.
+cedar-policy = { version = "4.14", default-features = false }
+
+axum = { version = "0.8", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls",
+  "postgres",
+  "uuid",
+] }
+subtle = "2"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+uuid = "1"
+
+clap = { version = "4", features = ["derive", "env"], optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tokio = { workspace = true, features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+uuid = { version = "1", features = ["v4"] }
