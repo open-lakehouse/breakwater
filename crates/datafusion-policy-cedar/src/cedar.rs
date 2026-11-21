@@ -622,7 +622,7 @@ where
     /// satisfied forbid or default-deny ⇒ `Deny`; a satisfied unconditional
     /// permit ⇒ `Allow`; `None` when genuine residuals remain) together with the
     /// surviving nontrivial (permit, forbid) residual policies. The caller needs
-    /// both: `nontrivial_residual_policies` drops trivially-true/false policies,
+    /// both: `residual_policies` drops trivially-true/false policies,
     /// so a tag-conditioned forbid that folds *true* (denies the whole table)
     /// shows up only in `decision`, not the forbid residuals.
     fn table_residuals(
@@ -674,7 +674,7 @@ where
         let decision = response.decision().map(neutral_decision);
         let mut permits = Vec::new();
         let mut forbids = Vec::new();
-        for policy in response.nontrivial_residual_policies() {
+        for policy in response.residual_policies() {
             match policy.effect() {
                 cedar_policy::Effect::Permit => permits.push(policy),
                 cedar_policy::Effect::Forbid => forbids.push(policy),
