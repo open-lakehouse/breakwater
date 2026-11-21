@@ -287,6 +287,14 @@ fn check_validates_without_a_database() {
     assert_eq!(fixed.unwrap().len(), 2);
 }
 
+/// Hosts spawn `start` on a multi-threaded runtime (napi's, axum's).
+#[test]
+fn start_is_send() {
+    fn send<T: Send>(_: T) {}
+    let config = Config::default();
+    send(embed::start(&config));
+}
+
 #[tokio::test]
 async fn start_needs_a_database_url() {
     let err = embed::start_with_secrets(&Config::default(), Vec::new(), |_| None)

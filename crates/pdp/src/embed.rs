@@ -41,10 +41,9 @@ impl Service {
 /// read the callers' secrets from the environment and prepare the connection
 /// pool (connected on first use). Never migrates.
 pub async fn start(config: &Config) -> Result<Service, Error> {
-    start_with_secrets(config, std::env::vars().map(|(key, _)| key), |key| {
-        std::env::var(key).ok()
-    })
-    .await
+    // Collected first: `std::env::Vars` isn't `Send`, and the future must be.
+    let vars: Vec<String> = std::env::vars().map(|(key, _)| key).collect();
+    start_with_secrets(config, vars, |key| std::env::var(key).ok()).await
 }
 
 /// [`start`] with the callers' secrets from `secret` instead of the process
