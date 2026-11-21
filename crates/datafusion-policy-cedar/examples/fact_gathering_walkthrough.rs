@@ -530,7 +530,7 @@ async fn main() {
     let translator = CedarResidualTranslator::default();
     println!("  facts: principal.region=eu (bound) · resource=UNKNOWN (deferred → residual)");
     let mut produced_residual = false;
-    for residual in response.nontrivial_residual_policies() {
+    for residual in response.residual_policies() {
         produced_residual = true;
         let effect = format!("{:?}", residual.effect());
         match translator.to_predicate(&residual) {
