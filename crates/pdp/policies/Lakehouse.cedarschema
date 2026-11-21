@@ -1,0 +1,30 @@
+// The PDP's own vocabulary: the principals every service's fragment refers to,
+// and how they are grouped. The entity loader builds them (src/loader.rs);
+// nothing here comes from token claims.
+//
+// What a principal holds is not on the principal: the loader puts it on the
+// securables (`privileges`, `inherited_privileges`; see each service's
+// fragment), so a policy can ask where a grant sits.
+namespace Lakehouse {
+  // A Neon Auth role (`neon_auth."user".role`), e.g. `admin`, as a parent of
+  // its users.
+  entity Role;
+
+  // An `authz.groups` row, by name. Groups can contain groups.
+  entity Group in [Group];
+
+  // A Neon Auth user, by its id (loaded only with `PDP_NEON_AUTH`).
+  entity User in [Group, Role] {
+    // `neon_auth."user".role`: `user` or `admin` (the Console's "Make admin").
+    neon_role: String,
+    // Banned, and the ban hasn't expired.
+    banned: Bool,
+    email_verified: Bool,
+  };
+
+  // An `authz.service_accounts` row, by its id.
+  entity ServiceAccount in [Group] {
+    name: String,
+    disabled: Bool,
+  };
+}
