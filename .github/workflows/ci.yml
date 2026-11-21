@@ -148,6 +148,22 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    # olai-pdp's tests/postgres.rs: one database per test on this server.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # A throwaway server on the runner: no password.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PDP_TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -201,11 +217,27 @@ jobs:
       - name: Doc
         run: cargo doc --no-deps --workspace --all-features
 
+  # The PDP image builds (published only on release, by docker-release.yml).
+  docker-pdp:
+    name: docker-pdp
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build
+        run: docker build -f crates/pdp/Dockerfile -t pdp:ci .
+      - name: Check the built-in policies
+        run: docker run --rm pdp:ci check
+
   # Single roll-up status. Make THIS the one required check in branch protection.
   ci:
     name: ci
     if: ${{ always() }}
-    needs: [fmt, machete, clippy, msrv, proto-check, test, doc]
+    needs: [fmt, machete, clippy, msrv, proto-check, test, doc, docker-pdp]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -219,7 +251,8 @@ jobs:
             "msrv:${{ needs.msrv.result }}" \
             "proto-check:${{ needs.proto-check.result }}" \
             "test:${{ needs.test.result }}" \
-            "doc:${{ needs.doc.result }}"; do
+            "doc:${{ needs.doc.result }}" \
+            "docker-pdp:${{ needs.docker-pdp.result }}"; do
             name="${r%%:*}"; result="${r##*:}"
             echo "$name -> $result"
             if [ "$result" != "success" ]; then
