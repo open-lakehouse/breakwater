@@ -25,7 +25,7 @@ datafusion-policy = { package = "olai-datafusion-policy", version = "0.0.4", pat
 
 async-trait = { version = "^0.1.89" }
 cedar-local-agent = "3.0.0"
-cedar-policy = { version = "4.8.2", features = ["protobufs"] }
+cedar-policy = { version = "4.14", features = ["protobufs"] }
 dashmap = "6.0.1"
 datafusion = "55"
 datafusion-common = "55"
