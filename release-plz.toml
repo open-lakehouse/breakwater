@@ -83,6 +83,12 @@ changelog_path = "crates/cedar-oci/CHANGELOG.md"
 name = "olai-datafusion-policy-cedar"
 changelog_path = "crates/datafusion-policy-cedar/CHANGELOG.md"
 
+# The Cedar PDP service. Its release tag (`olai-pdp-v<version>`) also builds
+# the `ghcr.io/open-lakehouse/pdp` image.
+[[package]]
+name = "olai-pdp"
+changelog_path = "crates/pdp/CHANGELOG.md"
+
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
 # Because commits use crate scopes (feat(cedar-oci): ...), each crate's
@@ -107,5 +113,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's changelog
 # is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((datafusion-policy-cedar|datafusion-policy|cedar-oci|oci|cedar|policy)\)', replace = "" },
+  { pattern = '\((datafusion-policy-cedar|datafusion-policy|cedar-oci|pdp|oci|cedar|policy)\)', replace = "" },
 ]

@@ -22,8 +22,10 @@ your `use` paths stay idiomatic, e.g.
 | [`datafusion-policy-cedar`](crates/datafusion-policy-cedar) | `olai-datafusion-policy-cedar` | Cedar policy enforcement for DataFusion sessions: a coarse access gate plus optional row/column governance, attached to a `SessionState` as a query-planner extension. |
 | [`datafusion-policy`](crates/datafusion-policy) | `olai-datafusion-policy` | The engine-neutral policy core `datafusion-policy-cedar` builds on: the decide contract, session seam, and (behind `fgac`) the row-filter/column-mask rewrite — engine-agnostic, no Cedar dependency. |
 | [`cedar-oci`](crates/cedar-oci) | `olai-cedar-oci` | A Cedar policy provider backed by OCI-distributed policy bundles, with the generated `hydrofoil.policy` gRPC types. |
+| [`pdp`](crates/pdp) | `olai-pdp` | A Cedar policy decision point service: olai-auth's PDP wire API over Postgres-held grants, as a `pdp` binary, the `ghcr.io/open-lakehouse/pdp` image, or an embeddable router ([docs/pdp.md](docs/pdp.md)). |
 
-`datafusion-policy-cedar` depends on `datafusion-policy` and `cedar-oci`.
+`datafusion-policy-cedar` depends on `datafusion-policy` and `cedar-oci`. `pdp`
+stands alone: it decides requests for other services rather than queries.
 
 ## How it attaches to a session
 
