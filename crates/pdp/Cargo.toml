@@ -37,7 +37,7 @@ bin = [
 # The wire types the services' `HttpAuthorizer` speaks, the Cedar engine
 # (`CedarAuthorizer`), the grants entity loader over `authz.*`
 # (`GrantsEntityLoader`, `PgGrantStore`) and the `authz` migrations.
-olai-auth = { version = "0.0.4", features = ["cedar", "postgres"] }
+olai-auth = { version = "0.0.6", features = ["cedar", "postgres"] }
 # The cedar-policy olai-auth builds, listing the schema's actions. Not the
 # workspace pin: that one turns on `protobufs`, which no PDP host needs.
 cedar-policy = { version = "4.14", default-features = false }
