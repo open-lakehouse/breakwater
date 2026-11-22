@@ -13,7 +13,8 @@ name: Release-plz
 #
 # All three library crates are bootstrapped and publish over OIDC. A *new* publishable
 # crate needs a one-time token bootstrap + Trusted Publisher registration before
-# it can release this way. See release-plz.toml and CONTRIBUTING.md for the flow.
+# it can release this way (bootstrap-publish.yml). See release-plz.toml and
+# CONTRIBUTING.md for the flow.
 
 on:
   push:

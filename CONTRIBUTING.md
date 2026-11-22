@@ -66,9 +66,9 @@ sources.
 
 All published crates authenticate to crates.io via **Trusted Publishing
 (OIDC)** — the `release-plz.yml` release job runs with `id-token: write` in the
-protected `release` environment and needs **no** registry token. All three
-crates are bootstrapped and live on OIDC; nothing extra is required to cut a
-release.
+protected `release` environment and needs **no** registry token. Once a crate
+is bootstrapped (below) and its Trusted Publisher registered, nothing extra is
+required to cut a release.
 
 **Adding a brand-new publishable crate** needs a one-time bootstrap first
 publish, because OIDC cannot create a crate name that has never existed (there
@@ -77,9 +77,15 @@ blocks publishing from local machines. To onboard a new crate:
 
 1. Ensure the `release` GitHub Environment holds a crates.io token
    (publish-new scope) as its `CARGO_REGISTRY_TOKEN` secret.
-2. From CI (or, if the proxy allows, locally) run one token-authenticated
-   `cargo publish -p <crate> --locked` to create the crate name. Publish in
-   dependency order if the new crate depends on other not-yet-published crates.
+2. Run the **Bootstrap publish** workflow (`bootstrap-publish.yml`) from the
+   Actions tab with the crate's package name: first with `dry_run` checked
+   (the default), then unchecked. It runs one token-authenticated
+   `cargo publish -p <crate> --locked` in the `release` environment to create
+   the crate name. Publish in dependency order if the new crate depends on
+   other not-yet-published crates. The workflow publishes only: release-plz
+   skips the already-published version, so the crate's first tag and GitHub
+   Release come with its next release (and for `olai-pdp`, its first image,
+   unless you run `docker-release.yml` by hand).
 3. On crates.io, register the Trusted Publisher for the new crate (repo
    `open-lakehouse/breakwater`, workflow `release-plz.yml`, environment
    `release`). Once its Trusted Publisher is live, release-plz publishes it via
