@@ -191,7 +191,7 @@ impl TableProvider for GovernedTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -204,7 +204,7 @@ impl TableProvider for GovernedTableProvider {
         if let Some(projection) = projection {
             // Avoid a redundant identity projection (e.g. SELECT * FROM t).
             let identity = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
-            if projection != &identity {
+            if projection != identity.as_slice() {
                 let fields: Vec<Expr> = projection
                     .iter()
                     .map(|i| {
@@ -364,6 +364,41 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(ssn.value(0), "***", "ssn must be masked");
+    }
+
+    /// The `scan()` fallback projects the governed plan: a narrowing projection
+    /// keeps the masks and the row filter, and an identity one adds no projection.
+    #[tokio::test]
+    async fn scan_fallback_projects_the_governed_plan() {
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let eval = EvalContext::default();
+        let provider = governed(&filter_and_mask(), &eval).await;
+
+        let plan = provider
+            .scan(&state, Some(&[0, 2]), &[], None)
+            .await
+            .unwrap();
+        let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        let schema = batches[0].schema();
+        let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, ["id", "ssn"]);
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 1, "row filter must drop the non-eu row");
+        let ssn = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(ssn.value(0), "***", "ssn must be masked");
+
+        let plan = provider
+            .scan(&state, Some(&[0, 1, 2]), &[], None)
+            .await
+            .unwrap();
+        assert_eq!(plan.schema().fields().len(), 3);
     }
 
     #[tokio::test]
