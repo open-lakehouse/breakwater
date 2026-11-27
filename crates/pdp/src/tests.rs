@@ -95,7 +95,7 @@ fn service() -> Service {
     let configured = [Caller::new("SVC", "Svc"), Caller::new("OTHER", "Other")];
     let callers = Callers::new(
         &configured,
-        &[],
+        None,
         "AUTHZ_TOKEN_",
         ["AUTHZ_TOKEN_SVC".to_string(), "AUTHZ_TOKEN_STRAY".into()],
         |key| match key {
@@ -265,7 +265,7 @@ async fn refuses_an_oversized_batch() {
 async fn a_caller_without_a_secret_is_not_configured() {
     let callers = Callers::new(
         &[Caller::new("SVC", "Svc")],
-        &[],
+        None,
         "AUTHZ_TOKEN_",
         Vec::new(),
         |_| Some(String::new()),

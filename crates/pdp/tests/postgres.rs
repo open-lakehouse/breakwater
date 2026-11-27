@@ -244,8 +244,8 @@ async fn an_unreachable_database_is_a_quick_deny() {
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
-/// UC Java's recorded `SELECT` on `analytics.reports.orders` over the OPA
-/// route, with the reference policies: alice (`Alice@Example.com`, a SELECT on
+/// UC Java's recorded `SELECT` on `analytics.reports.orders` over the trusted
+/// listener's OPA route, with the reference policies: alice (`Alice@Example.com`, a SELECT on
 /// the catalog) is resolved by her verified email; bob, holding the same grant
 /// with an unverified email, resolves to nobody.
 #[tokio::test]
@@ -257,27 +257,25 @@ async fn the_opa_route_over_the_database() {
         database_url: Some(url.clone()),
         policy_dirs: vec![concat!(env!("CARGO_MANIFEST_DIR"), "/policies/unitycatalog-opa").into()],
         callers: vec![Caller::new("UCJAVA", "UnityCatalogOpa")],
-        path_token_callers: vec!["UCJAVA".into()],
+        trusted_caller: Some("UCJAVA".into()),
         entity_ttl: Duration::ZERO,
         neon_auth: true,
         ..Config::default()
     };
-    let service = embed::start_with_secrets(&config, Vec::new(), |key| {
-        (key == "AUTHZ_TOKEN_UCJAVA").then(|| TOKEN.to_string())
-    })
-    .await
-    .unwrap();
+    let service = embed::start_with_secrets(&config, Vec::new(), |_| None)
+        .await
+        .unwrap();
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/opa/uc-java/select-table.json")).unwrap();
     let allow = |email: &'static str, external_id: Option<&'static str>| {
         let mut body = fixture.clone();
         body["input"]["principal"] =
             json!({ "id": "uc-id", "email": email, "external_id": external_id });
-        let request = Request::post(format!("/opa/{TOKEN}/v1/data/uc/authz"))
+        let request = Request::post("/v1/data/uc/authz")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
             .unwrap();
-        let router = service.router();
+        let router = service.trusted_router().unwrap();
         async move {
             let response = router.oneshot(request).await.unwrap();
             assert!(response.status().is_success());

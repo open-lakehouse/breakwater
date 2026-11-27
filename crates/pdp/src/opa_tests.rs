@@ -21,7 +21,6 @@ use crate::loader::{GROUP, PrincipalResolver, SERVICE_ACCOUNT, USER};
 use crate::opa::OpaPrincipal;
 use crate::policy::PolicySet;
 
-const UCJAVA_TOKEN: &str = "uc-java-secret";
 const UCRS_TOKEN: &str = "uc-rs-secret";
 const NS: &str = "UnityCatalogOpa";
 
@@ -221,24 +220,38 @@ async fn service() -> Service {
         SubjectTypes::new(USER, SERVICE_ACCOUNT, GROUP),
     )
     .with_principal_attrs(FakeUsers);
+    // UC Java is the trusted listener's caller and has no secret.
     let callers = Callers::new(
         &[Caller::new("UCJAVA", NS), Caller::new("UCRS", NS)],
-        &["UCJAVA".to_string()],
+        Some("UCJAVA"),
         "AUTHZ_TOKEN_",
         Vec::new(),
-        |key| match key {
-            "AUTHZ_TOKEN_UCJAVA" => Some(UCJAVA_TOKEN.into()),
-            "AUTHZ_TOKEN_UCRS" => Some(UCRS_TOKEN.into()),
-            _ => None,
-        },
+        |key| (key == "AUTHZ_TOKEN_UCRS").then(|| UCRS_TOKEN.into()),
     );
     let actions = set.actions().unwrap();
     embed::service(&set, loader, FakeResolver, callers, actions).unwrap()
 }
 
-/// POST `body` to `path`, with `bearer` if any: the status, the
-/// `WWW-Authenticate` header and the JSON body.
+/// Which of the service's listeners a request goes to.
+#[derive(Clone, Copy)]
+enum Listener {
+    Main,
+    Trusted,
+}
+
+/// POST `body` to `path` on the main listener, with `bearer` if any: the
+/// status, the `WWW-Authenticate` header and the JSON body.
 async fn post(
+    path: &str,
+    bearer: Option<&str>,
+    body: String,
+) -> (StatusCode, Option<String>, Value) {
+    post_to(Listener::Main, path, bearer, body).await
+}
+
+/// [`post`] to `listener`.
+async fn post_to(
+    listener: Listener,
     path: &str,
     bearer: Option<&str>,
     body: String,
@@ -247,9 +260,12 @@ async fn post(
     if let Some(token) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
     }
-    let response = service()
-        .await
-        .router()
+    let service = service().await;
+    let router = match listener {
+        Listener::Main => service.router(),
+        Listener::Trusted => service.trusted_router().unwrap(),
+    };
+    let response = router
         .oneshot(builder.body(Body::from(body)).unwrap())
         .await
         .unwrap();
@@ -266,14 +282,14 @@ async fn post(
     )
 }
 
-/// UC Java's configured decision URL: the secret in the path.
-fn uc_java_url() -> String {
-    format!("/opa/{UCJAVA_TOKEN}/v1/data/uc/authz")
-}
+/// UC Java's configured decision URL, on the trusted listener.
+const UC_JAVA_PATH: &str = "/v1/data/uc/authz";
 
-/// What UC Java would read from the answer to `body`.
+/// What UC Java would read from the answer to `body`, sent without a
+/// credential to the trusted listener.
 async fn uc_java(body: &Value) -> bool {
-    let (status, _, answer) = post(&uc_java_url(), None, body.to_string()).await;
+    let (status, _, answer) =
+        post_to(Listener::Trusted, UC_JAVA_PATH, None, body.to_string()).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     allow(&answer)
 }
@@ -475,26 +491,68 @@ async fn an_input_that_does_not_map_is_a_deny() {
 #[tokio::test]
 async fn authenticates_callers() {
     let body = fixture("uc-java/select-table").to_string();
-    // The bearer route needs a bearer.
-    let (status, www, _) = post("/v1/data/uc/authz", None, body.clone()).await;
+    // The main listener needs a bearer, also on the OPA route.
+    let (status, www, _) = post(UC_JAVA_PATH, None, body.clone()).await;
     assert_eq!(
         (status, www.as_deref()),
         (StatusCode::UNAUTHORIZED, Some("Bearer"))
     );
-    // A path token works only for a caller opted in to path tokens.
-    let (status, www, _) = post(
-        &format!("/opa/{UCRS_TOKEN}/v1/data/uc/authz"),
-        None,
-        body.clone(),
-    )
-    .await;
-    assert_eq!((status, www), (StatusCode::UNAUTHORIZED, None));
-    let (status, _, _) = post("/opa/wrong/v1/data/uc/authz", None, body.clone()).await;
+    let (status, _, _) = post(UC_JAVA_PATH, Some("wrong"), body.clone()).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // An opted-in caller may still use its bearer.
-    let (status, _, answer) = post("/v1/data/any/package", Some(UCJAVA_TOKEN), body).await;
+    // The trusted caller has no secret, so nothing reaches it there.
+    let (status, _, _) = post(UC_JAVA_PATH, Some(""), body.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Any package path works.
+    let (status, _, answer) = post("/v1/data/any/package", Some(UCRS_TOKEN), body).await;
     assert_eq!(status, StatusCode::OK);
     assert!(allow(&answer));
+}
+
+#[tokio::test]
+async fn the_trusted_listener_serves_only_the_opa_route() {
+    let decision = json!({
+        "principal": { "type": "Lakehouse::User", "id": ALICE },
+        "action": { "type": "UnityCatalogOpa::Action", "id": "SELECT" },
+        "resource": { "type": "UnityCatalogOpa::Catalog", "id": "analytics" },
+    });
+    for path in ["/v1/authorize", "/v1/authorize/batch"] {
+        let (status, _, _) = post_to(Listener::Trusted, path, None, decision.to_string()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    // A bearer changes nothing there: every request is the trusted caller's.
+    let body = fixture("uc-java/select-table").to_string();
+    let (status, _, answer) =
+        post_to(Listener::Trusted, UC_JAVA_PATH, Some(UCRS_TOKEN), body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(allow(&answer));
+}
+
+#[tokio::test]
+async fn no_trusted_caller_no_trusted_listener() {
+    let set = PolicySet::from_sources(&[
+        (
+            "builtin:Lakehouse.cedarschema".into(),
+            crate::policy::BUILTIN[0].1.into(),
+        ),
+        (
+            "builtin:baseline.cedar".into(),
+            crate::policy::BUILTIN[1].1.into(),
+        ),
+    ])
+    .unwrap();
+    let callers = Callers::new(
+        &[Caller::new("UCRS", NS)],
+        None,
+        "AUTHZ_TOKEN_",
+        Vec::new(),
+        |_| Some(UCRS_TOKEN.into()),
+    );
+    let loader = GrantsEntityLoader::new(
+        MemoryGrantStore::new(),
+        SubjectTypes::new(USER, SERVICE_ACCOUNT, GROUP),
+    );
+    let service = embed::service(&set, loader, FakeResolver, callers, Vec::new()).unwrap();
+    assert!(service.trusted_router().is_none());
 }
 
 #[tokio::test]
@@ -504,7 +562,7 @@ async fn refuses_a_bad_body() {
         r#"{"principal": {}}"#,
         r#"{"input": {"privilege": "SELECT"}}"#,
     ] {
-        let (status, _, answer) = post(&uc_java_url(), None, body.into()).await;
+        let (status, _, answer) = post_to(Listener::Trusted, UC_JAVA_PATH, None, body.into()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert!(
             answer["error"]

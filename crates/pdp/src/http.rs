@@ -1,8 +1,12 @@
 //! The PDP's HTTP surface: `GET /health` (open), `POST /v1/authorize` and
 //! `POST /v1/authorize/batch` (`olai_auth::wire`), and the OPA-compatible
 //! `POST /v1/data/{package}` for the configured callers, each holding its
-//! `<token_prefix><NAME>` secret as a bearer token. A caller opted in to path
-//! tokens may instead call `POST /opa/{secret}/v1/data/{package}`.
+//! `<token_prefix><NAME>` secret as a bearer token.
+//!
+//! The trusted router ([`trusted_router`]) serves `GET /health` and
+//! `POST /v1/data/{package}` with no credential, every request as the one
+//! trusted caller, for a client that can't send one (UC Java 0.8). Serve it
+//! only where nothing but that client can reach it.
 
 use std::fmt;
 use std::sync::Arc;
@@ -30,15 +34,15 @@ use crate::opa::{self, ContextShapes, OpaRequest};
 /// The most requests one batch may carry.
 const MAX_BATCH: usize = 1000;
 
-/// A service holding a secret: its name, its namespace's action type, and the
-/// SHA-256 of its secret.
+/// A service that may call: its name, its namespace and that namespace's
+/// action type, and the SHA-256 of its secret, if it has one.
 struct Caller {
     service: String,
     namespace: String,
     action_type: String,
-    digest: [u8; 32],
-    /// May present its secret in the OPA route's path.
-    path_token: bool,
+    digest: Option<[u8; 32]>,
+    /// The caller of the trusted router.
+    trusted: bool,
 }
 
 /// The callers configured in the environment.
@@ -46,12 +50,12 @@ pub(crate) struct Callers(Vec<Caller>);
 
 impl Callers {
     /// Every one of `configured` whose secret (`<prefix><NAME>`, from
-    /// `secret`) is set and non-empty, those named in `path_token` allowed to
-    /// present it in the OPA route's path. `vars` are the names in the
-    /// environment: one with the prefix that names no caller is reported.
+    /// `secret`) is set and non-empty, and the `trusted` caller, which needs
+    /// none. `vars` are the names in the environment: one with the prefix that
+    /// names no caller is reported.
     pub(crate) fn new(
         configured: &[config::Caller],
-        path_token: &[String],
+        trusted: Option<&str>,
         prefix: &str,
         vars: impl IntoIterator<Item = String>,
         secret: impl Fn(&str) -> Option<String>,
@@ -66,26 +70,40 @@ impl Callers {
         let mut callers = Vec::new();
         for caller in configured {
             let key = format!("{prefix}{}", caller.name);
-            match secret(&key).filter(|value| !value.is_empty()) {
-                Some(value) => {
-                    let path_token = path_token.contains(&caller.name);
-                    callers.push(Caller {
-                        service: caller.name.clone(),
-                        namespace: caller.namespace.clone(),
-                        action_type: format!("{}::Action", caller.namespace),
-                        digest: Sha256::digest(value.as_bytes()).into(),
-                        path_token,
-                    });
-                    tracing::info!(caller = %caller.name, namespace = %caller.namespace, path_token, "caller configured");
-                }
-                None => tracing::warn!(%key, "caller not configured: no secret"),
+            let digest = secret(&key)
+                .filter(|value| !value.is_empty())
+                .map(|value| Sha256::digest(value.as_bytes()).into());
+            let is_trusted = trusted == Some(caller.name.as_str());
+            if digest.is_none() && !is_trusted {
+                tracing::warn!(%key, "caller not configured: no secret");
+                continue;
             }
+            tracing::info!(
+                caller = %caller.name,
+                namespace = %caller.namespace,
+                secret = digest.is_some(),
+                trusted = is_trusted,
+                "caller configured"
+            );
+            callers.push(Caller {
+                service: caller.name.clone(),
+                namespace: caller.namespace.clone(),
+                action_type: format!("{}::Action", caller.namespace),
+                digest,
+                trusted: is_trusted,
+            });
         }
         Self(callers)
     }
 
+    /// Whether no caller has a secret: every request with a bearer is a 401.
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.iter().all(|caller| caller.digest.is_none())
+    }
+
+    /// The caller of the trusted router.
+    fn trusted(&self) -> Option<&Caller> {
+        self.0.iter().find(|caller| caller.trusted)
     }
 
     /// The caller whose secret is the request's bearer token. Every configured
@@ -96,16 +114,12 @@ impl Callers {
         if !scheme.eq_ignore_ascii_case("bearer") {
             return None;
         }
-        self.by_secret(token.trim())
-    }
-
-    /// The caller whose secret is `token`, comparing every configured secret
-    /// in constant time.
-    fn by_secret(&self, token: &str) -> Option<&Caller> {
-        let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        let digest: [u8; 32] = Sha256::digest(token.trim().as_bytes()).into();
         let mut found = None;
         for caller in &self.0 {
-            if bool::from(caller.digest.ct_eq(&digest)) {
+            if let Some(secret) = &caller.digest
+                && bool::from(secret.ct_eq(&digest))
+            {
                 found = Some(caller);
             }
         }
@@ -122,11 +136,9 @@ pub(crate) struct AppState {
     pub(crate) contexts: ContextShapes,
 }
 
-/// The OPA route, under its bearer form. Clients append nothing to their
-/// configured URL, so any package path works: it is logged, not decided on.
+/// The OPA route. Clients append nothing to their configured URL, so any
+/// package path works: it is logged, not decided on.
 pub(crate) const OPA_DATA_PATH: &str = "/v1/data/{*package}";
-/// The OPA route with the caller's secret in the path.
-pub(crate) const OPA_TOKEN_PATH: &str = "/opa/{token}/v1/data/{*package}";
 
 pub(crate) fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -134,16 +146,26 @@ pub(crate) fn router(state: Arc<AppState>) -> Router {
         .route(AUTHORIZE_PATH, post(authorize))
         .route(AUTHORIZE_BATCH_PATH, post(authorize_batch))
         .route(OPA_DATA_PATH, post(opa_bearer))
-        .route(OPA_TOKEN_PATH, post(opa_path_token))
         .with_state(state)
+}
+
+/// The router of the trusted listener, if a trusted caller is configured:
+/// `GET /health` and `POST /v1/data/{package}`, every request as that caller,
+/// with no credential. Nothing else is served there.
+pub(crate) fn trusted_router(state: Arc<AppState>) -> Option<Router> {
+    state.callers.trusted()?;
+    Some(
+        Router::new()
+            .route("/health", get(|| async { "OK" }))
+            .route(OPA_DATA_PATH, post(opa_trusted))
+            .with_state(state),
+    )
 }
 
 /// A request refused before it is decided: an HTTP error with a JSON body.
 struct Refusal {
     status: StatusCode,
     message: String,
-    /// Whether a 401 asks for a bearer token (`WWW-Authenticate: Bearer`).
-    challenge: bool,
 }
 
 impl Refusal {
@@ -151,16 +173,6 @@ impl Refusal {
         Self {
             status,
             message: message.into(),
-            challenge: true,
-        }
-    }
-
-    /// A 401 of the path-token route, which takes no bearer.
-    fn unknown_path_token() -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            message: "unknown path token".into(),
-            challenge: false,
         }
     }
 }
@@ -169,7 +181,7 @@ impl IntoResponse for Refusal {
     fn into_response(self) -> Response {
         let mut response =
             (self.status, axum::Json(json!({ "error": self.message }))).into_response();
-        if self.status == StatusCode::UNAUTHORIZED && self.challenge {
+        if self.status == StatusCode::UNAUTHORIZED {
             response
                 .headers_mut()
                 .insert(header::WWW_AUTHENTICATE, "Bearer".parse().expect("static"));
@@ -261,18 +273,17 @@ async fn opa_bearer(
     Ok(opa_decide(&state, caller, &package, request).await)
 }
 
-/// `POST /opa/{token}/v1/data/{package}`, the caller identified by the secret
-/// in its path. Only callers opted in to path tokens.
-async fn opa_path_token(
+/// `POST /v1/data/{package}` on the trusted listener: the trusted caller,
+/// with no credential.
+async fn opa_trusted(
     State(state): State<Arc<AppState>>,
-    Path((token, package)): Path<(String, String)>,
+    Path(package): Path<String>,
     body: Bytes,
 ) -> Result<axum::Json<serde_json::Value>, Refusal> {
     let caller = state
         .callers
-        .by_secret(&token)
-        .filter(|caller| caller.path_token)
-        .ok_or_else(Refusal::unknown_path_token)?;
+        .trusted()
+        .expect("the trusted router is built only with a trusted caller");
     let request: OpaRequest = serde_json::from_slice(&body)
         .map_err(|e| Refusal::new(StatusCode::BAD_REQUEST, format!("invalid request: {e}")))?;
     Ok(opa_decide(&state, caller, &package, request).await)

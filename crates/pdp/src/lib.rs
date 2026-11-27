@@ -10,9 +10,9 @@
 //! OPA-compatible `POST /v1/data/{package}` instead: `{"input": …}` in,
 //! `{"result": {"allow": …}}` out, one privilege check per request, decided
 //! in the caller's namespace (see `policies/unitycatalog-opa`). A client that
-//! sends no `Authorization` header (UC Java) puts its secret in the path,
-//! `POST /opa/{secret}/v1/data/{package}`, if its caller is opted in with
-//! [`Config::path_token_callers`].
+//! sends no credential (UC Java) calls a trusted listener instead, bound to one
+//! caller ([`Config::trusted_caller`], [`embed::Service::trusted_router`]),
+//! where the network is what authenticates it.
 //!
 //! Decisions are [`olai_auth::CedarAuthorizer`]'s, over the built-in
 //! `Lakehouse` schema and baseline ([`policy::BUILTIN`]) plus the schema

@@ -102,6 +102,8 @@ impl PgEntityLoader {
 
 /// Who an OPA input's principal is, as a PDP principal (the OPA route's
 /// clients send their own user ids, not the PDP's).
+// `async_trait` marks the boxed future `#[must_use]`, which it already is.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait PrincipalResolver: Send + Sync + 'static {
     /// The principal `principal` is. An error is a deny.

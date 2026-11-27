@@ -23,15 +23,25 @@ pub const AUTHZ_SCHEMA: &str = "authz";
 #[derive(Clone)]
 pub struct Service {
     router: Router,
+    trusted_router: Option<Router>,
     actions: Arc<Vec<ActionRef>>,
 }
 
 impl Service {
     /// The router: `GET /health`, `POST /v1/authorize`, `POST /v1/authorize/batch`,
-    /// and the OPA-compatible `POST /v1/data/{package}` and
-    /// `POST /opa/{secret}/v1/data/{package}`.
+    /// and the OPA-compatible `POST /v1/data/{package}`, each with a caller's
+    /// bearer secret.
     pub fn router(&self) -> Router {
         self.router.clone()
+    }
+
+    /// The trusted listener's router, with a
+    /// [`trusted_caller`](Config::trusted_caller): `GET /health` and
+    /// `POST /v1/data/{package}`, every request as that caller, with no
+    /// credential. Serve it on its own listener, where nothing but that
+    /// caller can reach it, never next to [`router`](Self::router).
+    pub fn trusted_router(&self) -> Option<Router> {
+        self.trusted_router.clone()
     }
 
     /// The actions of the composed schema, sorted.
@@ -66,7 +76,7 @@ pub async fn start_with_secrets(
     let loader = PgEntityLoader::new(database_url, config.entity_ttl, config.neon_auth)?;
     let callers = Callers::new(
         &config.callers,
-        &config.path_token_callers,
+        config.trusted_caller.as_deref(),
         &config.token_prefix,
         vars,
         secret,
@@ -99,14 +109,15 @@ pub(crate) fn service(
     if callers.is_empty() {
         tracing::warn!("no caller has a secret: every authorization request is a 401");
     }
-    let router = crate::http::router(Arc::new(AppState {
+    let state = Arc::new(AppState {
         authorizer,
         callers,
         resolver: Box::new(resolver),
         contexts,
-    }));
+    });
     Ok(Service {
-        router,
+        router: crate::http::router(state.clone()),
+        trusted_router: crate::http::trusted_router(state),
         actions: Arc::new(actions),
     })
 }
