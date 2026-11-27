@@ -11,7 +11,8 @@ use serde_json::Value;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::http::{AppState, Callers};
-use crate::loader::PgEntityLoader;
+use crate::loader::{PgEntityLoader, PrincipalResolver};
+use crate::opa::ContextShapes;
 use crate::policy::{ActionRef, PolicySet};
 use crate::{Config, Error};
 
@@ -22,13 +23,25 @@ pub const AUTHZ_SCHEMA: &str = "authz";
 #[derive(Clone)]
 pub struct Service {
     router: Router,
+    trusted_router: Option<Router>,
     actions: Arc<Vec<ActionRef>>,
 }
 
 impl Service {
-    /// The router: `GET /health`, `POST /v1/authorize`, `POST /v1/authorize/batch`.
+    /// The router: `GET /health`, `POST /v1/authorize`, `POST /v1/authorize/batch`,
+    /// and the OPA-compatible `POST /v1/data/{package}`, each with a caller's
+    /// bearer secret.
     pub fn router(&self) -> Router {
         self.router.clone()
+    }
+
+    /// The trusted listener's router, with a
+    /// [`trusted_caller`](Config::trusted_caller): `GET /health` and
+    /// `POST /v1/data/{package}`, every request as that caller, with no
+    /// credential. Serve it on its own listener, where nothing but that
+    /// caller can reach it, never next to [`router`](Self::router).
+    pub fn trusted_router(&self) -> Option<Router> {
+        self.trusted_router.clone()
     }
 
     /// The actions of the composed schema, sorted.
@@ -53,6 +66,7 @@ pub async fn start_with_secrets(
     vars: impl IntoIterator<Item = String>,
     secret: impl Fn(&str) -> Option<String>,
 ) -> Result<Service, Error> {
+    config.check()?;
     let set = PolicySet::load(config.builtin_policies, &config.policy_dirs)?;
     let actions = set.actions()?;
     let database_url = config
@@ -60,8 +74,15 @@ pub async fn start_with_secrets(
         .as_deref()
         .ok_or_else(|| Error::Config("set PDP_DATABASE_URL or DATABASE_URL".into()))?;
     let loader = PgEntityLoader::new(database_url, config.entity_ttl, config.neon_auth)?;
-    let callers = Callers::new(&config.callers, &config.token_prefix, vars, secret);
-    service(&set, loader, callers, actions)
+    let callers = Callers::new(
+        &config.callers,
+        config.trusted_caller.as_deref(),
+        &config.token_prefix,
+        vars,
+        secret,
+    );
+    let resolver = loader.resolver();
+    service(&set, loader, resolver, callers, actions)
 }
 
 /// Validate the policies without a database: the actions of the schema, or why
@@ -71,26 +92,32 @@ pub fn check(config: &Config) -> Result<Vec<ActionRef>, Error> {
     let actions = set.actions()?;
     CedarAuthorizer::new(&set.schema, &set.policies, NoEntities)
         .map_err(|e| Error::Policy(e.to_string()))?;
+    ContextShapes::from_schema(&set.schema).map_err(Error::Policy)?;
     Ok(actions)
 }
 
 pub(crate) fn service(
     set: &PolicySet,
     loader: impl EntityLoader,
+    resolver: impl PrincipalResolver,
     callers: Callers,
     actions: Vec<ActionRef>,
 ) -> Result<Service, Error> {
     let authorizer = CedarAuthorizer::new(&set.schema, &set.policies, loader)
         .map_err(|e| Error::Policy(e.to_string()))?;
+    let contexts = ContextShapes::from_schema(&set.schema).map_err(Error::Policy)?;
     if callers.is_empty() {
         tracing::warn!("no caller has a secret: every authorization request is a 401");
     }
-    let router = crate::http::router(Arc::new(AppState {
+    let state = Arc::new(AppState {
         authorizer,
         callers,
-    }));
+        resolver: Box::new(resolver),
+        contexts,
+    });
     Ok(Service {
-        router,
+        router: crate::http::router(state.clone()),
+        trusted_router: crate::http::trusted_router(state),
         actions: Arc::new(actions),
     })
 }

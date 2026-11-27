@@ -1,0 +1,26 @@
+{
+  "input": {
+    "principal": {
+      "id": "0b0b0b0b-1c1c-4d2d-8e3e-4f4f4f4f4f4f",
+      "email": "bob@example.com"
+    },
+    "privilege": "SELECT",
+    "resource": {
+      "id": "3f0b9a52-6c1e-4d7a-8b23-91e4c5d6a7f8",
+      "type": "TABLE",
+      "name": "orders",
+      "parents": [
+        {
+          "id": "b84d2e17-9a3c-4f60-a1d5-2c7e8f9b0a34",
+          "type": "SCHEMA",
+          "name": "reports"
+        },
+        {
+          "id": "e5c3a1d9-4b7f-4e28-9c06-a8b1d2f3e4c5",
+          "type": "CATALOG",
+          "name": "analytics"
+        }
+      ]
+    }
+  }
+}

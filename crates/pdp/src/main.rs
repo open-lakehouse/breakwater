@@ -1,12 +1,15 @@
 //! `pdp`: the policy decision point as a standalone server.
 //!
-//! - `pdp serve`: serve the router on `PDP_HOST:PDP_PORT`. It never migrates.
+//! - `pdp serve`: serve the router on `PDP_HOST:PDP_PORT`, and with a
+//!   `PDP_TRUSTED_CALLER` the trusted router on `PDP_TRUSTED_HOST:PDP_TRUSTED_PORT`.
+//!   It never migrates.
 //! - `pdp migrate`: apply the `authz` migrations to the database.
 //! - `pdp check`: validate the policies, with no database, and list the actions.
 //! - `pdp healthcheck`: `GET /health` on the local port (the image's HEALTHCHECK).
 //!
 //! Every setting comes from the environment ([`olai_pdp::Config::from_env`]).
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -53,12 +56,38 @@ async fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Serve => {
             let service = olai_pdp::embed::start(&config).await?;
+            let trusted = match (service.trusted_router(), config.trusted_port) {
+                (Some(router), Some(port)) => {
+                    let addr = SocketAddr::new(config.trusted_host, port);
+                    Some((tokio::net::TcpListener::bind(addr).await?, addr, router))
+                }
+                (Some(_), None) => return Err("PDP_TRUSTED_CALLER needs a PDP_TRUSTED_PORT".into()),
+                (None, _) => None,
+            };
             let addr = SocketAddr::new(config.host, config.port);
             let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::info!(%addr, actions = service.actions().len(), "pdp serving");
-            axum::serve(listener, service.router())
-                .with_graceful_shutdown(shutdown())
-                .await?;
+            let (stop, stopped) = tokio::sync::watch::channel(false);
+            tokio::spawn(async move {
+                shutdown().await;
+                let _ = stop.send(true);
+            });
+            let until = |mut stopped: tokio::sync::watch::Receiver<bool>| async move {
+                let _ = stopped.wait_for(|stop| *stop).await;
+            };
+            let main = axum::serve(listener, service.router())
+                .with_graceful_shutdown(until(stopped.clone()))
+                .into_future();
+            match trusted {
+                Some((listener, addr, router)) => {
+                    tracing::info!(%addr, caller = ?config.trusted_caller, "pdp serving the trusted listener");
+                    let trusted = axum::serve(listener, router)
+                        .with_graceful_shutdown(until(stopped))
+                        .into_future();
+                    tokio::try_join!(main, trusted)?;
+                }
+                None => main.await?,
+            }
         }
         Command::Migrate => {
             let url = config

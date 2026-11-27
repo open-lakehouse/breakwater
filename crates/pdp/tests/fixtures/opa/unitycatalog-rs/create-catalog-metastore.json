@@ -1,0 +1,23 @@
+{
+  "input": {
+    "principal": {
+      "id": "u-1",
+      "email": "alice@example.com",
+      "external_id": "entra:abc",
+      "groups": [
+        "entra:analysts"
+      ]
+    },
+    "privilege": "CREATE_CATALOG",
+    "resource": {
+      "id": "m-1",
+      "type": "METASTORE",
+      "owner": "admin",
+      "parents": []
+    },
+    "context": {
+      "auth_method": "jwt",
+      "source_ip": "10.1.2.3"
+    }
+  }
+}

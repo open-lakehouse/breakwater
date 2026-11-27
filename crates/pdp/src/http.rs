@@ -1,13 +1,19 @@
-//! The PDP's HTTP surface: `GET /health` (open), and `POST /v1/authorize` and
-//! `POST /v1/authorize/batch` (`olai_auth::wire`) for the configured callers,
-//! each holding its `<token_prefix><NAME>` secret.
+//! The PDP's HTTP surface: `GET /health` (open), `POST /v1/authorize` and
+//! `POST /v1/authorize/batch` (`olai_auth::wire`), and the OPA-compatible
+//! `POST /v1/data/{package}` for the configured callers, each holding its
+//! `<token_prefix><NAME>` secret as a bearer token.
+//!
+//! The trusted router ([`trusted_router`]) serves `GET /health` and
+//! `POST /v1/data/{package}` with no credential, every request as the one
+//! trusted caller, for a client that can't send one (UC Java 0.8). Serve it
+//! only where nothing but that client can reach it.
 
 use std::fmt;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -22,16 +28,21 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::config;
+use crate::loader::{LOAD_TIMEOUT, PrincipalResolver};
+use crate::opa::{self, ContextShapes, OpaRequest};
 
 /// The most requests one batch may carry.
 const MAX_BATCH: usize = 1000;
 
-/// A service holding a secret: its name, its namespace's action type, and the
-/// SHA-256 of its secret.
+/// A service that may call: its name, its namespace and that namespace's
+/// action type, and the SHA-256 of its secret, if it has one.
 struct Caller {
     service: String,
+    namespace: String,
     action_type: String,
-    digest: [u8; 32],
+    digest: Option<[u8; 32]>,
+    /// The caller of the trusted router.
+    trusted: bool,
 }
 
 /// The callers configured in the environment.
@@ -39,10 +50,12 @@ pub(crate) struct Callers(Vec<Caller>);
 
 impl Callers {
     /// Every one of `configured` whose secret (`<prefix><NAME>`, from
-    /// `secret`) is set and non-empty. `vars` are the names in the
-    /// environment: one with the prefix that names no caller is reported.
+    /// `secret`) is set and non-empty, and the `trusted` caller, which needs
+    /// none. `vars` are the names in the environment: one with the prefix that
+    /// names no caller is reported.
     pub(crate) fn new(
         configured: &[config::Caller],
+        trusted: Option<&str>,
         prefix: &str,
         vars: impl IntoIterator<Item = String>,
         secret: impl Fn(&str) -> Option<String>,
@@ -57,23 +70,40 @@ impl Callers {
         let mut callers = Vec::new();
         for caller in configured {
             let key = format!("{prefix}{}", caller.name);
-            match secret(&key).filter(|value| !value.is_empty()) {
-                Some(value) => {
-                    callers.push(Caller {
-                        service: caller.name.clone(),
-                        action_type: format!("{}::Action", caller.namespace),
-                        digest: Sha256::digest(value.as_bytes()).into(),
-                    });
-                    tracing::info!(caller = %caller.name, namespace = %caller.namespace, "caller configured");
-                }
-                None => tracing::warn!(%key, "caller not configured: no secret"),
+            let digest = secret(&key)
+                .filter(|value| !value.is_empty())
+                .map(|value| Sha256::digest(value.as_bytes()).into());
+            let is_trusted = trusted == Some(caller.name.as_str());
+            if digest.is_none() && !is_trusted {
+                tracing::warn!(%key, "caller not configured: no secret");
+                continue;
             }
+            tracing::info!(
+                caller = %caller.name,
+                namespace = %caller.namespace,
+                secret = digest.is_some(),
+                trusted = is_trusted,
+                "caller configured"
+            );
+            callers.push(Caller {
+                service: caller.name.clone(),
+                namespace: caller.namespace.clone(),
+                action_type: format!("{}::Action", caller.namespace),
+                digest,
+                trusted: is_trusted,
+            });
         }
         Self(callers)
     }
 
+    /// Whether no caller has a secret: every request with a bearer is a 401.
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.iter().all(|caller| caller.digest.is_none())
+    }
+
+    /// The caller of the trusted router.
+    fn trusted(&self) -> Option<&Caller> {
+        self.0.iter().find(|caller| caller.trusted)
     }
 
     /// The caller whose secret is the request's bearer token. Every configured
@@ -87,7 +117,9 @@ impl Callers {
         let digest: [u8; 32] = Sha256::digest(token.trim().as_bytes()).into();
         let mut found = None;
         for caller in &self.0 {
-            if bool::from(caller.digest.ct_eq(&digest)) {
+            if let Some(secret) = &caller.digest
+                && bool::from(secret.ct_eq(&digest))
+            {
                 found = Some(caller);
             }
         }
@@ -98,14 +130,36 @@ impl Callers {
 pub(crate) struct AppState {
     pub(crate) authorizer: CedarAuthorizer,
     pub(crate) callers: Callers,
+    /// Who an OPA input's principal is.
+    pub(crate) resolver: Box<dyn PrincipalResolver>,
+    /// The context each action declares, for the OPA route.
+    pub(crate) contexts: ContextShapes,
 }
+
+/// The OPA route. Clients append nothing to their configured URL, so any
+/// package path works: it is logged, not decided on.
+pub(crate) const OPA_DATA_PATH: &str = "/v1/data/{*package}";
 
 pub(crate) fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(|| async { "OK" }))
         .route(AUTHORIZE_PATH, post(authorize))
         .route(AUTHORIZE_BATCH_PATH, post(authorize_batch))
+        .route(OPA_DATA_PATH, post(opa_bearer))
         .with_state(state)
+}
+
+/// The router of the trusted listener, if a trusted caller is configured:
+/// `GET /health` and `POST /v1/data/{package}`, every request as that caller,
+/// with no credential. Nothing else is served there.
+pub(crate) fn trusted_router(state: Arc<AppState>) -> Option<Router> {
+    state.callers.trusted()?;
+    Some(
+        Router::new()
+            .route("/health", get(|| async { "OK" }))
+            .route(OPA_DATA_PATH, post(opa_trusted))
+            .with_state(state),
+    )
 }
 
 /// A request refused before it is decided: an HTTP error with a JSON body.
@@ -182,7 +236,7 @@ async fn authorize(
     let (caller, request) = accept::<AuthorizeRequest>(&state, &headers, &body)?;
     check_namespace(caller, &request)?;
     let response = state.authorizer.authorize(&request).await;
-    log(caller, &request, &response);
+    log(caller, &request, &response, None);
     Ok(axum::Json(response))
 }
 
@@ -203,16 +257,100 @@ async fn authorize_batch(
     }
     let responses = state.authorizer.authorize_batch(&batch.requests).await;
     for (request, response) in batch.requests.iter().zip(&responses) {
-        log(caller, request, response);
+        log(caller, request, response, None);
     }
     Ok(axum::Json(BatchAuthorizeResponse { responses }))
 }
 
+/// `POST /v1/data/{package}`, the caller identified by its bearer token.
+async fn opa_bearer(
+    State(state): State<Arc<AppState>>,
+    Path(package): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<axum::Json<serde_json::Value>, Refusal> {
+    let (caller, request) = accept::<OpaRequest>(&state, &headers, &body)?;
+    Ok(opa_decide(&state, caller, &package, request).await)
+}
+
+/// `POST /v1/data/{package}` on the trusted listener: the trusted caller,
+/// with no credential.
+async fn opa_trusted(
+    State(state): State<Arc<AppState>>,
+    Path(package): Path<String>,
+    body: Bytes,
+) -> Result<axum::Json<serde_json::Value>, Refusal> {
+    let caller = state
+        .callers
+        .trusted()
+        .expect("the trusted router is built only with a trusted caller");
+    let request: OpaRequest = serde_json::from_slice(&body)
+        .map_err(|e| Refusal::new(StatusCode::BAD_REQUEST, format!("invalid request: {e}")))?;
+    Ok(opa_decide(&state, caller, &package, request).await)
+}
+
+/// Decide an OPA input in the caller's namespace and answer
+/// `{"result": {"allow": …}}`, the only shape UC's clients accept. A principal
+/// that doesn't resolve, or an input that doesn't map, is a deny.
+async fn opa_decide(
+    state: &AppState,
+    caller: &Caller,
+    package: &str,
+    request: OpaRequest,
+) -> axum::Json<serde_json::Value> {
+    let input = request.input;
+    let resolved =
+        match tokio::time::timeout(LOAD_TIMEOUT, state.resolver.resolve(&input.principal)).await {
+            Ok(resolved) => resolved.map_err(|e| format!("resolving the principal: {e}")),
+            Err(_) => Err(format!(
+                "resolving the principal timed out after {LOAD_TIMEOUT:?}"
+            )),
+        };
+    let action =
+        olai_auth::wire::EntityRef::new(caller.action_type.clone(), input.privilege.clone());
+    let mut context = input.context.clone().unwrap_or_default();
+    // Ours, whatever the client put there.
+    context.remove(opa::PRINCIPAL_EMAIL);
+    if let Some(email) = input.principal.email() {
+        context.insert(opa::PRINCIPAL_EMAIL.into(), email.into());
+    }
+    let context = state.contexts.project(&action, &context);
+    let mapped = resolved
+        .and_then(|principal| opa::to_authorize(&caller.namespace, &input, principal, context));
+    let allow = match mapped {
+        Ok(request) => {
+            let response = state.authorizer.authorize(&request).await;
+            log(caller, &request, &response, Some(package));
+            response.is_allowed()
+        }
+        Err(error) => {
+            tracing::info!(
+                target: "olai_pdp::decision",
+                caller = %caller.service,
+                package,
+                principal = ?input.principal,
+                action = %Uid(&action),
+                decision = "deny",
+                errors = ?[&error],
+                "decision"
+            );
+            false
+        }
+    };
+    axum::Json(json!({ "result": { "allow": allow } }))
+}
+
 /// The decision log: one line per decision.
-fn log(caller: &Caller, request: &AuthorizeRequest, response: &AuthorizeResponse) {
+fn log(
+    caller: &Caller,
+    request: &AuthorizeRequest,
+    response: &AuthorizeResponse,
+    package: Option<&str>,
+) {
     tracing::info!(
         target: "olai_pdp::decision",
         caller = %caller.service,
+        package,
         principal = %Uid(&request.principal),
         action = %Uid(&request.action),
         resource = %Uid(&request.resource),

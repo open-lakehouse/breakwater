@@ -44,6 +44,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use uuid::Uuid;
 
 use crate::Error;
+use crate::opa::OpaPrincipal;
 
 pub const USER: &str = "Lakehouse::User";
 pub const SERVICE_ACCOUNT: &str = "Lakehouse::ServiceAccount";
@@ -61,6 +62,8 @@ const MAX_CACHED: usize = 10_000;
 /// [`Principals`], under a deadline.
 pub struct PgEntityLoader {
     inner: GrantsEntityLoader<CachedFacts<PgGrantStore>, Principals>,
+    pool: PgPool,
+    neon_auth: bool,
 }
 
 impl PgEntityLoader {
@@ -77,8 +80,74 @@ impl PgEntityLoader {
             .connect_lazy_with(options);
         let store = CachedFacts::new(PgGrantStore::new(pool.clone()), ttl);
         let inner = GrantsEntityLoader::new(store, SubjectTypes::new(USER, SERVICE_ACCOUNT, GROUP))
-            .with_principal_attrs(Principals { pool, neon_auth });
-        Ok(Self { inner })
+            .with_principal_attrs(Principals {
+                pool: pool.clone(),
+                neon_auth,
+            });
+        Ok(Self {
+            inner,
+            pool,
+            neon_auth,
+        })
+    }
+
+    /// The resolver of OPA principals over the same database.
+    pub fn resolver(&self) -> PgPrincipalResolver {
+        PgPrincipalResolver {
+            pool: self.pool.clone(),
+            neon_auth: self.neon_auth,
+        }
+    }
+}
+
+/// Who an OPA input's principal is, as a PDP principal (the OPA route's
+/// clients send their own user ids, not the PDP's).
+// `async_trait` marks the boxed future `#[must_use]`, which it already is.
+#[allow(clippy::double_must_use)]
+#[async_trait]
+pub trait PrincipalResolver: Send + Sync + 'static {
+    /// The principal `principal` is. An error is a deny.
+    async fn resolve(&self, principal: &OpaPrincipal) -> Result<EntityRef, BoxError>;
+}
+
+/// Resolves an OPA principal to a Neon Auth `Lakehouse::User`: the user whose
+/// id is its `external_id`, else the user with its `email`
+/// (case-insensitive), only if that email is verified, so an account can't
+/// claim someone else's grants by signing up with their address. UC's own
+/// user id is never used. Without [`Config::neon_auth`](crate::Config::neon_auth)
+/// nobody resolves. Never cached.
+pub struct PgPrincipalResolver {
+    pool: PgPool,
+    neon_auth: bool,
+}
+
+#[async_trait]
+impl PrincipalResolver for PgPrincipalResolver {
+    async fn resolve(&self, principal: &OpaPrincipal) -> Result<EntityRef, BoxError> {
+        if !self.neon_auth {
+            return Err("no user source is configured (PDP_NEON_AUTH)".into());
+        }
+        let external_id = principal.external_id();
+        let email = principal.email();
+        if external_id.is_none() && email.is_none() {
+            return Err("the principal has neither an external_id nor an email".into());
+        }
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"SELECT id::text FROM neon_auth."user"
+               WHERE ($1::text IS NOT NULL AND id::text = $1)
+                  OR ($2::text IS NOT NULL AND lower(email) = lower($2)
+                      AND coalesce("emailVerified", false))
+               ORDER BY (id::text = coalesce($1, '')) DESC
+               LIMIT 1"#,
+        )
+        .bind(external_id)
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+        let (id,) = row.ok_or_else(|| {
+            format!("no Neon Auth user with id {external_id:?} or verified email {email:?}")
+        })?;
+        Ok(EntityRef::new(USER, id))
     }
 }
 

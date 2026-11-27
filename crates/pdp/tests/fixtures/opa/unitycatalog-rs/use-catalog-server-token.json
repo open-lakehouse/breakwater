@@ -1,0 +1,24 @@
+{
+  "input": {
+    "principal": {
+      "id": "u-1",
+      "email": "alice@example.com",
+      "groups": []
+    },
+    "privilege": "USE_CATALOG",
+    "resource": {
+      "id": "c-1",
+      "type": "CATALOG",
+      "name": "main",
+      "owner": "admin",
+      "parents": []
+    },
+    "context": {
+      "auth_method": "server-token",
+      "provider": "server",
+      "groups": [],
+      "request_time": "2027-01-15T08:00:00Z",
+      "source_ip": "127.0.0.1"
+    }
+  }
+}

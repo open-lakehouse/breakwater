@@ -6,6 +6,14 @@
 //! with a per-caller bearer secret, and `GET /health`, open. A caller asks only
 //! about the actions of its own Cedar namespace.
 //!
+//! Unity Catalog's OPA authorizers (UC Java 0.8, unitycatalog-rs) call the
+//! OPA-compatible `POST /v1/data/{package}` instead: `{"input": …}` in,
+//! `{"result": {"allow": …}}` out, one privilege check per request, decided
+//! in the caller's namespace (see `policies/unitycatalog-opa`). A client that
+//! sends no credential (UC Java) calls a trusted listener instead, bound to one
+//! caller ([`Config::trusted_caller`], [`embed::Service::trusted_router`]),
+//! where the network is what authenticates it.
+//!
 //! Decisions are [`olai_auth::CedarAuthorizer`]'s, over the built-in
 //! `Lakehouse` schema and baseline ([`policy::BUILTIN`]) plus the schema
 //! fragments and policies of the configured directories, validated in strict
@@ -28,9 +36,11 @@ mod config;
 pub mod embed;
 mod http;
 pub mod loader;
+mod opa;
 pub mod policy;
 
 pub use config::{Caller, Config, DEFAULT_ENTITY_TTL, DEFAULT_PORT, DEFAULT_TOKEN_PREFIX};
+pub use opa::OpaPrincipal;
 pub use policy::ActionRef;
 
 /// Why the PDP can't start.
@@ -48,5 +58,7 @@ pub enum Error {
     Database(String),
 }
 
+#[cfg(test)]
+mod opa_tests;
 #[cfg(test)]
 mod tests;

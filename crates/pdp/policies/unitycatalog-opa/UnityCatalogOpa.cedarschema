@@ -1,0 +1,104 @@
+// The privilege-level Unity Catalog namespace of olai-pdp's OPA route
+// (`POST /v1/data/{package}`), for UC Java 0.8 (`server.authorization.provider=opa`)
+// and unitycatalog-rs (`auth.engine=opa`). Copy it into a `PDP_POLICY_DIRS`
+// directory (the image has it at /usr/share/pdp/unitycatalog-opa), and name the
+// namespace in the caller: `PDP_CALLERS=UCJAVA=UnityCatalogOpa`.
+//
+// Each OPA input is one leaf privilege check, `privilege` on `resource`:
+//
+// - The action is the privilege as the clients send it, UPPER_SNAKE
+//   (`UnityCatalogOpa::Action::"USE_CATALOG"`).
+// - The resource type is the input's `type` in PascalCase (`REGISTERED_MODEL` is
+//   `RegisteredModel`), and each of its `parents` is its Cedar parent in turn.
+// - Entity ids are full names: `analytics` (catalog), `analytics.reports`
+//   (schema), `analytics.reports.orders` (table), and an external location's or
+//   credential's name. The metastore, which has no name, is its UC id. Grants
+//   are keyed by these ids in `authz.grants`.
+//
+// The route sets `name` (the leaf name), `uc_id` (UC's id) and, when the client
+// sends it, `owner`. The entity loader sets, for the calling principal:
+//
+// - `privileges`: what is granted on that securable itself, to the principal or
+//   a group it is in;
+// - `inherited_privileges`: the union over the securable and its parents.
+namespace UnityCatalogOpa {
+  entity Metastore = {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    uc_id?: String,
+    owner?: String,
+  };
+
+  entity Catalog in [Metastore] = {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    name?: String,
+    uc_id?: String,
+    owner?: String,
+  };
+
+  entity Schema in [Catalog] = {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    name?: String,
+    uc_id?: String,
+    owner?: String,
+  };
+
+  // Securables in a schema. UC sends a staging table as a `TABLE`.
+  entity Table, Volume, Function, RegisteredModel in [Schema] = {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    name?: String,
+    uc_id?: String,
+    owner?: String,
+  };
+
+  // Securables of the metastore. UC sends them without parents.
+  entity ExternalLocation, Credential in [Metastore] = {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    name?: String,
+    uc_id?: String,
+    owner?: String,
+  };
+
+  // The request context. The route keeps only the attributes declared here
+  // from the input's `context`, so this record is the allowlist: add the
+  // headers a trusted proxy sets (and the gateway strips on ingress) to
+  // `headers`, e.g. `"x-tenant"?: String`.
+  //
+  // unitycatalog-rs sends `source_ip`, `auth_method`, `provider`, `groups` and
+  // `request_time`; UC Java sends no context. `groups` is what the client
+  // asserts, not the principal's memberships (those are its `Lakehouse::Group`
+  // parents). `principal_email` is the input's `principal.email`, set by the
+  // route.
+  type Context = {
+    source_ip?: ipaddr,
+    auth_method?: String,
+    provider?: String,
+    groups?: Set<String>,
+    request_time?: datetime,
+    principal_email?: String,
+    headers?: {
+      "x-tenant"?: String,
+    },
+  };
+
+  // UC's privileges (`Privileges.java`), and `ALL_PRIVILEGES` for grants.
+  action "OWNER", "CREATE_CATALOG", "USE_CATALOG", "CREATE_SCHEMA", "USE_SCHEMA",
+    "CREATE_TABLE", "SELECT", "MODIFY", "CREATE_FUNCTION", "EXECUTE",
+    "CREATE_VOLUME", "READ_VOLUME", "WRITE_VOLUME", "CREATE_MODEL",
+    "CREATE_MODEL_VERSION", "CREATE_EXTERNAL_LOCATION", "READ_FILES",
+    "WRITE_FILES", "CREATE_EXTERNAL_TABLE", "CREATE_EXTERNAL_VOLUME",
+    "CREATE_MANAGED_STORAGE", "CREATE_STORAGE_CREDENTIAL", "BROWSE", "MANAGE",
+    "READ_METADATA", "ALL_PRIVILEGES"
+    appliesTo {
+      principal: [Lakehouse::User, Lakehouse::ServiceAccount],
+      resource: [
+        Metastore, Catalog, Schema, Table, Volume, Function, RegisteredModel,
+        ExternalLocation, Credential
+      ],
+      context: Context,
+    };
+}
