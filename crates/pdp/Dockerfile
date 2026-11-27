@@ -43,6 +43,9 @@ COPY --from=builder /app/target/release/pdp /usr/local/bin/pdp
 # The built-in Lakehouse schema and baseline are compiled in. Mount the
 # deployment's schema fragments and policies and point PDP_POLICY_DIRS at them
 # (e.g. `-v ./policies:/etc/pdp/policies:ro -e PDP_POLICY_DIRS=/etc/pdp/policies`).
+# The reference privilege-level namespace of the OPA route ships here, so UC's
+# OPA clients work with `PDP_POLICY_DIRS=/usr/share/pdp/unitycatalog-opa`.
+COPY crates/pdp/policies/unitycatalog-opa /usr/share/pdp/unitycatalog-opa
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

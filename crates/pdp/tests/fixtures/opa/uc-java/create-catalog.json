@@ -1,0 +1,15 @@
+{
+  "input": {
+    "principal": {
+      "id": "7a1c0f5e-2b8d-4c39-9e61-0d4f5a3b2c10",
+      "email": "alice@example.com",
+      "external_id": "subject-123"
+    },
+    "privilege": "CREATE_CATALOG",
+    "resource": {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "type": "METASTORE",
+      "parents": []
+    }
+  }
+}

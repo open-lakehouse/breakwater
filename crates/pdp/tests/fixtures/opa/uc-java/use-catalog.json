@@ -1,0 +1,16 @@
+{
+  "input": {
+    "principal": {
+      "id": "7a1c0f5e-2b8d-4c39-9e61-0d4f5a3b2c10",
+      "email": "alice@example.com",
+      "external_id": "subject-123"
+    },
+    "privilege": "USE_CATALOG",
+    "resource": {
+      "id": "e5c3a1d9-4b7f-4e28-9c06-a8b1d2f3e4c5",
+      "type": "CATALOG",
+      "name": "analytics",
+      "parents": []
+    }
+  }
+}

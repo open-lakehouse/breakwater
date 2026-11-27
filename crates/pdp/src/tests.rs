@@ -3,13 +3,15 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use olai_auth::wire::AuthorizeRequest;
+use olai_auth::wire::{AuthorizeRequest, EntityRef};
 use olai_auth::{BoxError, EntityLoader, async_trait};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::embed::{self, Service};
 use crate::http::Callers;
+use crate::loader::PrincipalResolver;
+use crate::opa::OpaPrincipal;
 use crate::policy::PolicySet;
 use crate::{Caller, Config};
 
@@ -66,6 +68,16 @@ impl EntityLoader for Fake {
     }
 }
 
+/// Resolves no OPA principal.
+pub(crate) struct NoUsers;
+
+#[async_trait]
+impl PrincipalResolver for NoUsers {
+    async fn resolve(&self, _: &OpaPrincipal) -> Result<EntityRef, BoxError> {
+        Err("no users".into())
+    }
+}
+
 fn service() -> Service {
     let set = PolicySet::from_sources(&[
         (
@@ -83,6 +95,7 @@ fn service() -> Service {
     let configured = [Caller::new("SVC", "Svc"), Caller::new("OTHER", "Other")];
     let callers = Callers::new(
         &configured,
+        &[],
         "AUTHZ_TOKEN_",
         ["AUTHZ_TOKEN_SVC".to_string(), "AUTHZ_TOKEN_STRAY".into()],
         |key| match key {
@@ -92,7 +105,7 @@ fn service() -> Service {
         },
     );
     let actions = set.actions().unwrap();
-    embed::service(&set, Fake, callers, actions).unwrap()
+    embed::service(&set, Fake, NoUsers, callers, actions).unwrap()
 }
 
 fn request(principal: &str) -> Value {
@@ -252,6 +265,7 @@ async fn refuses_an_oversized_batch() {
 async fn a_caller_without_a_secret_is_not_configured() {
     let callers = Callers::new(
         &[Caller::new("SVC", "Svc")],
+        &[],
         "AUTHZ_TOKEN_",
         Vec::new(),
         |_| Some(String::new()),

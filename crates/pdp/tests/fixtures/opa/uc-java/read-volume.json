@@ -1,0 +1,27 @@
+{
+  "input": {
+    "principal": {
+      "id": "7a1c0f5e-2b8d-4c39-9e61-0d4f5a3b2c10",
+      "email": "alice@example.com",
+      "external_id": "subject-123"
+    },
+    "privilege": "READ_VOLUME",
+    "resource": {
+      "id": "6d2f8b41-3e5a-4c97-b0d8-7f1a2e3c4b56",
+      "type": "VOLUME",
+      "name": "landing",
+      "parents": [
+        {
+          "id": "b84d2e17-9a3c-4f60-a1d5-2c7e8f9b0a34",
+          "type": "SCHEMA",
+          "name": "reports"
+        },
+        {
+          "id": "e5c3a1d9-4b7f-4e28-9c06-a8b1d2f3e4c5",
+          "type": "CATALOG",
+          "name": "analytics"
+        }
+      ]
+    }
+  }
+}

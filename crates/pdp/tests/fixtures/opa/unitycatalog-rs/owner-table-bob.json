@@ -1,0 +1,32 @@
+{
+  "input": {
+    "principal": {
+      "id": "u-2",
+      "email": "bob@example.com",
+      "groups": []
+    },
+    "privilege": "OWNER",
+    "resource": {
+      "id": "t-1",
+      "type": "TABLE",
+      "name": "orders",
+      "owner": "bob@example.com",
+      "parents": [
+        {
+          "id": "s-1",
+          "type": "SCHEMA",
+          "name": "sales"
+        },
+        {
+          "id": "c-1",
+          "type": "CATALOG",
+          "name": "main"
+        }
+      ]
+    },
+    "context": {
+      "auth_method": "jwt",
+      "source_ip": "10.1.2.3"
+    }
+  }
+}

@@ -11,7 +11,8 @@ use serde_json::Value;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use crate::http::{AppState, Callers};
-use crate::loader::PgEntityLoader;
+use crate::loader::{PgEntityLoader, PrincipalResolver};
+use crate::opa::ContextShapes;
 use crate::policy::{ActionRef, PolicySet};
 use crate::{Config, Error};
 
@@ -26,7 +27,9 @@ pub struct Service {
 }
 
 impl Service {
-    /// The router: `GET /health`, `POST /v1/authorize`, `POST /v1/authorize/batch`.
+    /// The router: `GET /health`, `POST /v1/authorize`, `POST /v1/authorize/batch`,
+    /// and the OPA-compatible `POST /v1/data/{package}` and
+    /// `POST /opa/{secret}/v1/data/{package}`.
     pub fn router(&self) -> Router {
         self.router.clone()
     }
@@ -53,6 +56,7 @@ pub async fn start_with_secrets(
     vars: impl IntoIterator<Item = String>,
     secret: impl Fn(&str) -> Option<String>,
 ) -> Result<Service, Error> {
+    config.check()?;
     let set = PolicySet::load(config.builtin_policies, &config.policy_dirs)?;
     let actions = set.actions()?;
     let database_url = config
@@ -60,8 +64,15 @@ pub async fn start_with_secrets(
         .as_deref()
         .ok_or_else(|| Error::Config("set PDP_DATABASE_URL or DATABASE_URL".into()))?;
     let loader = PgEntityLoader::new(database_url, config.entity_ttl, config.neon_auth)?;
-    let callers = Callers::new(&config.callers, &config.token_prefix, vars, secret);
-    service(&set, loader, callers, actions)
+    let callers = Callers::new(
+        &config.callers,
+        &config.path_token_callers,
+        &config.token_prefix,
+        vars,
+        secret,
+    );
+    let resolver = loader.resolver();
+    service(&set, loader, resolver, callers, actions)
 }
 
 /// Validate the policies without a database: the actions of the schema, or why
@@ -71,23 +82,28 @@ pub fn check(config: &Config) -> Result<Vec<ActionRef>, Error> {
     let actions = set.actions()?;
     CedarAuthorizer::new(&set.schema, &set.policies, NoEntities)
         .map_err(|e| Error::Policy(e.to_string()))?;
+    ContextShapes::from_schema(&set.schema).map_err(Error::Policy)?;
     Ok(actions)
 }
 
 pub(crate) fn service(
     set: &PolicySet,
     loader: impl EntityLoader,
+    resolver: impl PrincipalResolver,
     callers: Callers,
     actions: Vec<ActionRef>,
 ) -> Result<Service, Error> {
     let authorizer = CedarAuthorizer::new(&set.schema, &set.policies, loader)
         .map_err(|e| Error::Policy(e.to_string()))?;
+    let contexts = ContextShapes::from_schema(&set.schema).map_err(Error::Policy)?;
     if callers.is_empty() {
         tracing::warn!("no caller has a secret: every authorization request is a 401");
     }
     let router = crate::http::router(Arc::new(AppState {
         authorizer,
         callers,
+        resolver: Box::new(resolver),
+        contexts,
     }));
     Ok(Service {
         router,

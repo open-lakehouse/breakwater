@@ -23,6 +23,7 @@ const TOKEN: &str = "svc-secret";
 const ADMIN: &str = "aaaaaaaa-0000-0000-0000-000000000001";
 const GRANTEE: &str = "aaaaaaaa-0000-0000-0000-000000000002";
 const MEMBER: &str = "aaaaaaaa-0000-0000-0000-000000000003";
+const UNVERIFIED: &str = "aaaaaaaa-0000-0000-0000-000000000004";
 const STRANGER: &str = "aaaaaaaa-0000-0000-0000-000000000099";
 const ROBOT: &str = "bbbbbbbb-0000-0000-0000-000000000001";
 const DISABLED_ROBOT: &str = "bbbbbbbb-0000-0000-0000-000000000002";
@@ -54,15 +55,17 @@ const FIXTURES: &str = r#"
 CREATE SCHEMA neon_auth;
 CREATE TABLE neon_auth."user" (
     id              uuid PRIMARY KEY,
+    email           text,
     "emailVerified" bool,
     role            text,
     banned          bool,
     "banExpires"    timestamptz
 );
-INSERT INTO neon_auth."user" (id, "emailVerified", role, banned) VALUES
-    ('aaaaaaaa-0000-0000-0000-000000000001', true, 'admin', false),
-    ('aaaaaaaa-0000-0000-0000-000000000002', true, NULL, false),
-    ('aaaaaaaa-0000-0000-0000-000000000003', true, 'user', false);
+INSERT INTO neon_auth."user" (id, email, "emailVerified", role, banned) VALUES
+    ('aaaaaaaa-0000-0000-0000-000000000001', 'admin@example.com', true, 'admin', false),
+    ('aaaaaaaa-0000-0000-0000-000000000002', 'Alice@Example.com', true, NULL, false),
+    ('aaaaaaaa-0000-0000-0000-000000000003', 'member@example.com', true, 'user', false),
+    ('aaaaaaaa-0000-0000-0000-000000000004', 'bob@example.com', false, 'user', false);
 INSERT INTO authz.service_accounts (id, name, disabled_at) VALUES
     ('bbbbbbbb-0000-0000-0000-000000000001', 'robot', NULL),
     ('bbbbbbbb-0000-0000-0000-000000000002', 'disabled-robot', now());
@@ -74,7 +77,9 @@ INSERT INTO authz.grants (subject_type, subject_id, privilege, object_type, obje
     ('user', 'aaaaaaaa-0000-0000-0000-000000000002', 'SELECT', 'Svc::Table', 't'),
     ('group', 'cccccccc-0000-0000-0000-000000000001', 'SELECT', 'Svc::Table', 't'),
     ('service_account', 'bbbbbbbb-0000-0000-0000-000000000001', 'SELECT', 'Svc::Table', 't'),
-    ('service_account', 'bbbbbbbb-0000-0000-0000-000000000002', 'SELECT', 'Svc::Table', 't');
+    ('service_account', 'bbbbbbbb-0000-0000-0000-000000000002', 'SELECT', 'Svc::Table', 't'),
+    ('user', 'aaaaaaaa-0000-0000-0000-000000000002', 'SELECT', 'UnityCatalogOpa::Catalog', 'analytics'),
+    ('user', 'aaaaaaaa-0000-0000-0000-000000000004', 'SELECT', 'UnityCatalogOpa::Catalog', 'analytics');
 "#;
 
 /// A fresh database on the test server, migrated and seeded.
@@ -237,4 +242,64 @@ async fn an_unreachable_database_is_a_quick_deny() {
         "{body}"
     );
     assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// UC Java's recorded `SELECT` on `analytics.reports.orders` over the OPA
+/// route, with the reference policies: alice (`Alice@Example.com`, a SELECT on
+/// the catalog) is resolved by her verified email; bob, holding the same grant
+/// with an unverified email, resolves to nobody.
+#[tokio::test]
+async fn the_opa_route_over_the_database() {
+    let Some((url, pool)) = fresh_db().await else {
+        return;
+    };
+    let config = Config {
+        database_url: Some(url.clone()),
+        policy_dirs: vec![concat!(env!("CARGO_MANIFEST_DIR"), "/policies/unitycatalog-opa").into()],
+        callers: vec![Caller::new("UCJAVA", "UnityCatalogOpa")],
+        path_token_callers: vec!["UCJAVA".into()],
+        entity_ttl: Duration::ZERO,
+        neon_auth: true,
+        ..Config::default()
+    };
+    let service = embed::start_with_secrets(&config, Vec::new(), |key| {
+        (key == "AUTHZ_TOKEN_UCJAVA").then(|| TOKEN.to_string())
+    })
+    .await
+    .unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/opa/uc-java/select-table.json")).unwrap();
+    let allow = |email: &'static str, external_id: Option<&'static str>| {
+        let mut body = fixture.clone();
+        body["input"]["principal"] =
+            json!({ "id": "uc-id", "email": email, "external_id": external_id });
+        let request = Request::post(format!("/opa/{TOKEN}/v1/data/uc/authz"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let router = service.router();
+        async move {
+            let response = router.oneshot(request).await.unwrap();
+            assert!(response.status().is_success());
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let answer: Value = serde_json::from_slice(&bytes).unwrap();
+            answer["result"]["allow"].as_bool().unwrap()
+        }
+    };
+    assert!(allow("alice@example.com", None).await, "a verified email");
+    assert!(
+        allow("alice@example.com", Some("subject-123")).await,
+        "an unknown external_id"
+    );
+    assert!(
+        allow("nobody@example.com", Some(GRANTEE)).await,
+        "the external_id first"
+    );
+    assert!(!allow("bob@example.com", None).await, "an unverified email");
+    assert!(
+        allow("bob@example.com", Some(UNVERIFIED)).await,
+        "an external_id needs no verified email"
+    );
+    assert!(!allow("member@example.com", None).await, "no grant");
+    pool.close().await;
 }

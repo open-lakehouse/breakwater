@@ -58,6 +58,11 @@ pub struct Config {
     pub builtin_policies: bool,
     /// The services that may call.
     pub callers: Vec<Caller>,
+    /// The callers that may also present their secret in the path of the OPA
+    /// route (`POST /opa/{secret}/v1/data/{package}`), for clients that send
+    /// no `Authorization` header (UC Java 0.8). Each must be one of
+    /// [`callers`](Self::callers).
+    pub path_token_callers: Vec<String>,
     /// The prefix of the callers' secrets in the environment.
     pub token_prefix: String,
     /// How long the loader reuses a principal's groups and grants (never when
@@ -79,6 +84,7 @@ impl Default for Config {
             policy_dirs: Vec::new(),
             builtin_policies: true,
             callers: Vec::new(),
+            path_token_callers: Vec::new(),
             token_prefix: DEFAULT_TOKEN_PREFIX.into(),
             entity_ttl: DEFAULT_ENTITY_TTL,
             neon_auth: false,
@@ -97,6 +103,7 @@ impl Config {
     /// | `PDP_POLICY_DIRS` (`:`-separated) | [`policy_dirs`](Self::policy_dirs) | none |
     /// | `PDP_BUILTIN_POLICIES` | [`builtin_policies`](Self::builtin_policies) | `true` |
     /// | `PDP_CALLERS` (`NAME=Namespace,…`) | [`callers`](Self::callers) | none |
+    /// | `PDP_PATH_TOKEN_CALLERS` (`NAME,…`) | [`path_token_callers`](Self::path_token_callers) | none |
     /// | `PDP_TOKEN_PREFIX` | [`token_prefix`](Self::token_prefix) | `AUTHZ_TOKEN_` |
     /// | `AUTHZ_ENTITY_TTL_MS` | [`entity_ttl`](Self::entity_ttl) | `2000` |
     /// | `PDP_NEON_AUTH` | [`neon_auth`](Self::neon_auth) | `false` |
@@ -129,6 +136,14 @@ impl Config {
         if let Some(value) = get("PDP_CALLERS") {
             config.callers = parse_callers(&value)?;
         }
+        if let Some(value) = get("PDP_PATH_TOKEN_CALLERS") {
+            config.path_token_callers = value
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(String::from)
+                .collect();
+        }
         if let Some(prefix) = get("PDP_TOKEN_PREFIX") {
             config.token_prefix = prefix;
         }
@@ -150,7 +165,21 @@ impl Config {
                 .parse()
                 .map_err(|e| Error::Config(format!("invalid PDP_PORT {port:?}: {e}")))?;
         }
+        config.check()?;
         Ok(config)
+    }
+
+    /// Fails when [`path_token_callers`](Self::path_token_callers) names a
+    /// caller that isn't configured.
+    pub fn check(&self) -> Result<(), Error> {
+        for name in &self.path_token_callers {
+            if !self.callers.iter().any(|c| &c.name == name) {
+                return Err(Error::Config(format!(
+                    "PDP_PATH_TOKEN_CALLERS names {name:?}, which is not in PDP_CALLERS"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -222,6 +251,7 @@ mod tests {
                 "PDP_CALLERS",
                 " UNITYCATALOG=UnityCatalog , HEADWATERS=Headwaters",
             ),
+            ("PDP_PATH_TOKEN_CALLERS", " UNITYCATALOG ,"),
             ("PDP_TOKEN_PREFIX", "PDP_TOKEN_"),
             ("AUTHZ_ENTITY_TTL_MS", "0"),
             ("PDP_NEON_AUTH", "yes"),
@@ -242,6 +272,7 @@ mod tests {
                 Caller::new("HEADWATERS", "Headwaters"),
             ]
         );
+        assert_eq!(config.path_token_callers, vec!["UNITYCATALOG".to_string()]);
         assert_eq!(config.token_prefix, "PDP_TOKEN_");
         assert!(config.entity_ttl.is_zero());
         assert!(config.neon_auth);
@@ -265,6 +296,7 @@ mod tests {
             [("PDP_NEON_AUTH", "maybe")],
             [("AUTHZ_ENTITY_TTL_MS", "-1")],
             [("PDP_PORT", "http")],
+            [("PDP_PATH_TOKEN_CALLERS", "NOBODY")],
         ] {
             assert!(config(&vars).is_err(), "{vars:?}");
         }
