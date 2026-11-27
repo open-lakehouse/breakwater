@@ -44,7 +44,8 @@ can also build a `Config` itself. An empty variable counts as unset.
 | `PDP_POLICY_DIRS` | none | `:`-separated directories of `*.cedarschema` and `*.cedar` files, read in file name order |
 | `PDP_BUILTIN_POLICIES` | `true` | Include the built-in `Lakehouse` schema and baseline |
 | `PDP_CALLERS` | none | `NAME=Namespace,…`: who may call, and about which namespace |
-| `PDP_PATH_TOKEN_CALLERS` | none | `NAME,…`: callers that may put their secret in the OPA route's path (see [OPA route](#the-opa-route)) |
+| `PDP_TRUSTED_CALLER` | none | `NAME`: the caller of the trusted listener, which takes no credential (see [Caller auth](#caller-auth)) |
+| `PDP_TRUSTED_HOST`, `PDP_TRUSTED_PORT` | `127.0.0.1`, none | The trusted listener's address. The port is required with `PDP_TRUSTED_CALLER` |
 | `PDP_TOKEN_PREFIX` | `AUTHZ_TOKEN_` | Caller `NAME`'s secret is `<prefix><NAME>` |
 | `AUTHZ_ENTITY_TTL_MS` | `2000` | How long groups and grants are reused (`0`: never) |
 | `PDP_NEON_AUTH` | `false` | Load users from Neon Auth's `neon_auth."user"` |
@@ -119,46 +120,50 @@ read only `result.allow`:
 The answer is `{"result":{"allow":true}}`. Always a 200, even a deny. A body
 without an `input` is a 400, which UC turns into a 503.
 
-| Route | Auth |
-|---|---|
-| `POST /v1/data/{package}` | the caller's bearer secret (unitycatalog-rs's `opa_token_file`) |
-| `POST /opa/{secret}/v1/data/{package}` | the caller's secret in the path, only for callers in `PDP_PATH_TOKEN_CALLERS` |
-
-The package (`uc/authz`) is logged and nothing else. The caller's namespace
-decides, as on `/v1/authorize`, so a client can't pick the namespace it asks
-about.
+`POST /v1/data/{package}` takes the caller's bearer secret, as unitycatalog-rs
+sends it from `opa_token_file`. The package (`uc/authz`) is logged and nothing
+else. The caller's namespace decides, as on `/v1/authorize`, so a client can't
+pick the namespace it asks about.
 
 ### Caller auth
 
-UC Java sends no `Authorization` header, and its URL validator refuses userinfo.
-So it puts the secret in the path:
-
-```properties
-server.authorization.provider=opa
-server.authorization.opa.decision-url=http://pdp:8080/opa/<AUTHZ_TOKEN_UCJAVA>/v1/data/uc/authz
-```
+UC Java 0.8 sends no credential to OPA: no `Authorization` header, no client
+certificate, and its URL validator refuses userinfo. The PDP therefore trusts
+the network path instead. A **trusted listener** serves only `GET /health` and
+`POST /v1/data/{package}`, takes no credential, and decides every request as
+one caller:
 
 ```bash
 PDP_CALLERS=UCJAVA=UnityCatalogOpa,UCRS=UnityCatalogOpa
-PDP_PATH_TOKEN_CALLERS=UCJAVA
-AUTHZ_TOKEN_UCJAVA=… AUTHZ_TOKEN_UCRS=…
+PDP_TRUSTED_CALLER=UCJAVA          # needs no secret
+PDP_TRUSTED_PORT=8181              # PDP_TRUSTED_HOST defaults to 127.0.0.1
+AUTHZ_TOKEN_UCRS=…                 # bearer callers stay on PDP_PORT
 ```
 
-The path secret is compared like a bearer, by SHA-256 and in constant time. A
-caller not in `PDP_PATH_TOKEN_CALLERS` is a 401 on that route, so another
-caller's secret is never accepted from a URL. This works wherever the PDP runs,
-including the hosted Neon Function, with no extra component.
+```properties
+server.authorization.provider=opa
+server.authorization.opa.decision-url=http://pdp:8181/v1/data/uc/authz
+```
 
-The cost is a secret in a URL. The PDP never logs paths, but a proxy's or a
-platform's access log might. Give the caller its own secret, and rotate it by
-changing UC's config. Where that isn't acceptable, either of these keeps the
-secret out of the URL:
+On this listener the network is the authentication. Serve it only where
+nothing but UC can reach it:
 
-- run the PDP next to UC on a private network with a proxy that adds
-  `Authorization: Bearer …`; or
-- use Envoy in front of the PDP, doing the same.
+- a sidecar on localhost (the default host);
+- a compose network shared only with UC; or
+- a k8s `NetworkPolicy` that admits only UC's pods.
 
-unitycatalog-rs and Polaris-style clients send the bearer to `/v1/data/…`.
+For the last two, set `PDP_TRUSTED_HOST` to the private address (in a
+container, `0.0.0.0`, and the network decides who reaches it). The listener
+never serves `/v1/authorize`, and the main listener never decides without a
+bearer. A host that embeds the PDP gets the same router from
+`Service::trusted_router()`, to serve on a listener of its own.
+
+Where UC can't reach the PDP over a trusted network, for example the hosted
+Neon Function, the credential belongs in UC's egress path instead. A gateway
+or sidecar in front of UC adds `Authorization: Bearer …` to its OPA calls, and
+UC calls the bearer route. UC itself stays unchanged. A UC Java that sends a
+bearer from a token file, as unitycatalog-rs does, would remove the need for
+either.
 
 ### The `UnityCatalogOpa` namespace
 
