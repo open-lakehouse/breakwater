@@ -9,6 +9,8 @@ perform an action on a resource, over [olai-auth]'s PDP wire API. A service's
 | `GET /health` | open | `OK` |
 | `POST /v1/authorize` | caller secret | one `AuthorizeRequest` → `AuthorizeResponse` |
 | `POST /v1/authorize/batch` | caller secret | up to 1000 requests, answered in order |
+| `POST /v1/data/{package}` | caller secret | OPA-compatible: `{input}` → `{result:{allow}}`, for Unity Catalog's OPA authorizers |
+| `POST /opa/{secret}/v1/data/{package}` | secret in the path | the same, for clients that send no `Authorization` header (UC Java) |
 
 A decision is always a 200, even a deny (with the reason in `errors`). A missing
 or unknown secret is a 401, a malformed body a 400, and an oversized batch a 413.

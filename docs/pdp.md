@@ -44,6 +44,7 @@ can also build a `Config` itself. An empty variable counts as unset.
 | `PDP_POLICY_DIRS` | none | `:`-separated directories of `*.cedarschema` and `*.cedar` files, read in file name order |
 | `PDP_BUILTIN_POLICIES` | `true` | Include the built-in `Lakehouse` schema and baseline |
 | `PDP_CALLERS` | none | `NAME=Namespace,…`: who may call, and about which namespace |
+| `PDP_PATH_TOKEN_CALLERS` | none | `NAME,…`: callers that may put their secret in the OPA route's path (see [OPA route](#the-opa-route)) |
 | `PDP_TOKEN_PREFIX` | `AUTHZ_TOKEN_` | Caller `NAME`'s secret is `<prefix><NAME>` |
 | `AUTHZ_ENTITY_TTL_MS` | `2000` | How long groups and grants are reused (`0`: never) |
 | `PDP_NEON_AUTH` | `false` | Load users from Neon Auth's `neon_auth."user"` |
@@ -96,9 +97,140 @@ actions) and the deployment's policies over it. For example, mangrove's
 
 The PDP reads only what olai-auth's `authz_reader` role may read.
 
+## The OPA route
+
+Unity Catalog's OPA authorizers can use the PDP as their OPA server. That is UC
+Java 0.8 (`server.authorization.provider=opa`) and unitycatalog-rs
+(`auth.engine=opa`). Both send one leaf privilege check per request, and both
+read only `result.allow`:
+
+```json
+{"input": {
+  "principal": {"id": "…", "email": "alice@example.com", "external_id": "…"},
+  "privilege": "SELECT",
+  "resource": {"id": "…", "type": "TABLE", "name": "orders", "parents": [
+    {"id": "…", "type": "SCHEMA", "name": "reports"},
+    {"id": "…", "type": "CATALOG", "name": "analytics"}
+  ]},
+  "context": {"source_ip": "10.1.2.3"}
+}}
+```
+
+The answer is `{"result":{"allow":true}}`. Always a 200, even a deny. A body
+without an `input` is a 400, which UC turns into a 503.
+
+| Route | Auth |
+|---|---|
+| `POST /v1/data/{package}` | the caller's bearer secret (unitycatalog-rs's `opa_token_file`) |
+| `POST /opa/{secret}/v1/data/{package}` | the caller's secret in the path, only for callers in `PDP_PATH_TOKEN_CALLERS` |
+
+The package (`uc/authz`) is logged and nothing else. The caller's namespace
+decides, as on `/v1/authorize`, so a client can't pick the namespace it asks
+about.
+
+### Caller auth
+
+UC Java sends no `Authorization` header, and its URL validator refuses userinfo.
+So it puts the secret in the path:
+
+```properties
+server.authorization.provider=opa
+server.authorization.opa.decision-url=http://pdp:8080/opa/<AUTHZ_TOKEN_UCJAVA>/v1/data/uc/authz
+```
+
+```bash
+PDP_CALLERS=UCJAVA=UnityCatalogOpa,UCRS=UnityCatalogOpa
+PDP_PATH_TOKEN_CALLERS=UCJAVA
+AUTHZ_TOKEN_UCJAVA=… AUTHZ_TOKEN_UCRS=…
+```
+
+The path secret is compared like a bearer, by SHA-256 and in constant time. A
+caller not in `PDP_PATH_TOKEN_CALLERS` is a 401 on that route, so another
+caller's secret is never accepted from a URL. This works wherever the PDP runs,
+including the hosted Neon Function, with no extra component.
+
+The cost is a secret in a URL. The PDP never logs paths, but a proxy's or a
+platform's access log might. Give the caller its own secret, and rotate it by
+changing UC's config. Where that isn't acceptable, either of these keeps the
+secret out of the URL:
+
+- run the PDP next to UC on a private network with a proxy that adds
+  `Authorization: Bearer …`; or
+- use Envoy in front of the PDP, doing the same.
+
+unitycatalog-rs and Polaris-style clients send the bearer to `/v1/data/…`.
+
+### The `UnityCatalogOpa` namespace
+
+`policies/unitycatalog-opa/` holds the reference schema and policies of a
+privilege-level namespace. They aren't built in. Copy them into a policy
+directory, or use the image's copy:
+`PDP_POLICY_DIRS=/usr/share/pdp/unitycatalog-opa`. The route maps an input into
+its caller's namespace:
+
+- The action is the privilege as sent, `UnityCatalogOpa::Action::"USE_CATALOG"`.
+- The resource type is `type` in PascalCase: `UnityCatalogOpa::RegisteredModel`.
+- Each of `parents` (nearest first) is the Cedar parent of the one before.
+- Ids are full names built from the leaf names: `analytics`, `analytics.reports`,
+  `analytics.reports.orders`, an external location's or credential's name. The
+  metastore, which has no name, is its UC id.
+- Each entity carries `name`, `uc_id` (UC's id) and, when the client sends it,
+  `owner`.
+- A type or privilege the schema doesn't know, or a securable without a name, is
+  a deny.
+
+Mangrove's `UnityCatalog` namespace is operation-level: one action per API
+operation, and the policies hold the table of which privileges each operation
+needs. Here UC has already reduced an operation to privilege checks, so a policy
+only answers whether a privilege holds on a securable.
+
+### Context
+
+The route keeps only the attributes of `input.context` that the action's
+`context` type declares. The schema is the allowlist. Values the schema types as
+`ipaddr` or `datetime` are built from their strings. The route also sets
+`principal_email` to the input's `principal.email`, overwriting anything the
+client sent under that name. The reference `Context` declares what
+unitycatalog-rs sends (`source_ip`, `auth_method`, `provider`, `groups`,
+`request_time`) and a `headers` record. To decide on a header a trusted proxy
+adds, declare it there, for example `"x-tenant"?: String`, and have the gateway
+strip that header on ingress. Then a policy can read `context.headers["x-tenant"]`.
+
+`context.groups` is whatever the client asserts. The principal's memberships are
+its `Lakehouse::Group` parents.
+
+### Principals
+
+The input's principal becomes a `Lakehouse::User`, by its Neon Auth id
+(`PDP_NEON_AUTH`):
+
+1. If `external_id` is a `neon_auth."user"` id, that user.
+2. Otherwise, the user with that `email`, case-insensitive, and only if the email
+   is verified. Otherwise signing up with someone's address would get their grants.
+3. Otherwise, a deny.
+
+UC's own `principal.id` (its random UUID) isn't used. Groups come from
+`authz.memberships`. The resolution isn't cached.
+
+### Grants
+
+Privileges come from `authz.grants`, keyed by `(UnityCatalogOpa::<Type>, <full
+name>)`. Grant `SELECT` on `UnityCatalogOpa::Catalog` `analytics`, and it holds on
+every table in that catalog (`inherited_privileges`). The reference policies:
+
+- allow a privilege that is granted on the securable or one of its parents;
+- allow `ALL_PRIVILEGES` for everything except `OWNER` and `MANAGE`;
+- allow `OWNER` for an `OWNER` grant on the securable itself, or when the client
+  sends an `owner` equal to the principal's email.
+
+UC Java keeps writing grants to its own store. The PDP never sees those grants.
+
 ## Testing
 
 `cargo nextest run -p olai-pdp` runs the HTTP surface over an in-memory loader.
+The OPA route's tests replay recorded UC Java and unitycatalog-rs inputs
+(`crates/pdp/tests/fixtures/opa`, with their provenance) over the reference
+policies.
 `tests/postgres.rs` runs the loader against a real database when
 `PDP_TEST_DATABASE_URL` points at a server where it can create databases, for
 example `postgres://postgres@localhost:5432/postgres` on a local server
